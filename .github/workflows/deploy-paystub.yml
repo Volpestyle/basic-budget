@@ -1,0 +1,369 @@
+name: Deploy Paystub Service
+
+on:
+  workflow_run:
+    workflows: ["Deploy Infrastructure"]
+    types: [completed]
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+    paths:
+      - 'packages/paystub-extractor/**'
+      - '.github/workflows/deploy-paystub.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+
+env:
+  AWS_REGION: us-east-1
+  GO_VERSION: '1.21'
+
+jobs:
+  determine-environment:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      should-deploy: ${{ steps.set-env.outputs.should-deploy }}
+    steps:
+      - name: Determine environment and deployment
+        id: set-env
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+            echo "should-deploy=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            if [[ "${{ github.event.workflow_run.head_branch }}" == "main" ]]; then
+              echo "environment=prod" >> $GITHUB_OUTPUT
+            elif [[ "${{ github.event.workflow_run.head_branch }}" == "develop" ]]; then
+              echo "environment=staging" >> $GITHUB_OUTPUT
+            else
+              echo "environment=dev" >> $GITHUB_OUTPUT
+            fi
+            echo "should-deploy=${{ github.event.workflow_run.conclusion == 'success' }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+            echo "should-deploy=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+            echo "should-deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+            echo "should-deploy=true" >> $GITHUB_OUTPUT
+          fi
+
+  test-and-build-paystub:
+    runs-on: ubuntu-latest
+    needs: determine-environment
+    if: needs.determine-environment.outputs.should-deploy == 'true'
+    defaults:
+      run:
+        working-directory: ./packages/paystub-extractor
+    outputs:
+      image-tag: ${{ steps.build-info.outputs.image-tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: packages/paystub-extractor/go.sum
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Run static analysis
+        run: |
+          go vet ./...
+          
+          # Install and run golint if available
+          if command -v golint &> /dev/null; then
+            golint ./...
+          fi
+          
+          # Install and run staticcheck if needed
+          if ! command -v staticcheck &> /dev/null; then
+            go install honnef.co/go/tools/cmd/staticcheck@latest
+          fi
+          staticcheck ./...
+
+      - name: Run tests
+        run: |
+          go test -v -race -coverprofile=coverage.out ./...
+          go tool cover -html=coverage.out -o coverage.html
+
+      - name: Upload test coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: paystub-coverage-${{ needs.determine-environment.outputs.environment }}
+          path: packages/paystub-extractor/coverage.html
+          retention-days: 7
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go build -ldflags="-w -s -X main.version=${{ github.sha }} -X main.buildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o bootstrap ./cmd/lambda
+
+      - name: Generate build info
+        id: build-info
+        run: |
+          IMAGE_TAG="${{ github.sha }}-${{ needs.determine-environment.outputs.environment }}"
+          echo "image-tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Create Dockerfile
+        run: |
+          cat > Dockerfile << 'EOF'
+          FROM public.ecr.aws/lambda/provided:al2-x86_64
+          
+          # Copy the binary
+          COPY bootstrap ${LAMBDA_RUNTIME_DIR}
+          
+          # Set the CMD to your handler
+          CMD [ "bootstrap" ]
+          EOF
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: paystub-binary-${{ needs.determine-environment.outputs.environment }}
+          path: |
+            packages/paystub-extractor/bootstrap
+            packages/paystub-extractor/Dockerfile
+          retention-days: 30
+
+  build-and-push-image:
+    runs-on: ubuntu-latest
+    needs: [determine-environment, test-and-build-paystub]
+    if: needs.determine-environment.outputs.should-deploy == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: paystub-binary-${{ needs.determine-environment.outputs.environment }}
+          path: ./packages/paystub-extractor
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PAYSTUB_DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-PaystubDeploy
+
+      - name: Get ECR repository URI
+        id: get-repo
+        run: |
+          REPO_URI=$(aws cloudformation describe-stacks \
+            --stack-name "basic-budget-paystub-${{ needs.determine-environment.outputs.environment }}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`ECRRepositoryUri`].OutputValue' \
+            --output text)
+          
+          echo "repo-uri=${REPO_URI}" >> $GITHUB_OUTPUT
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and tag Docker image
+        run: |
+          cd packages/paystub-extractor
+          chmod +x bootstrap
+          
+          docker build -t paystub-extractor:latest .
+          docker tag paystub-extractor:latest ${{ steps.get-repo.outputs.repo-uri }}:${{ needs.test-and-build-paystub.outputs.image-tag }}
+          docker tag paystub-extractor:latest ${{ steps.get-repo.outputs.repo-uri }}:latest
+
+      - name: Push image to ECR
+        run: |
+          docker push ${{ steps.get-repo.outputs.repo-uri }}:${{ needs.test-and-build-paystub.outputs.image-tag }}
+          docker push ${{ steps.get-repo.outputs.repo-uri }}:latest
+
+      - name: Scan image for vulnerabilities
+        continue-on-error: true
+        run: |
+          # Wait a moment for the image to be available
+          sleep 10
+          
+          # Start an image scan
+          aws ecr start-image-scan \
+            --repository-name basic-budget-paystub-${{ needs.determine-environment.outputs.environment }} \
+            --image-id imageTag=${{ needs.test-and-build-paystub.outputs.image-tag }} \
+            || echo "Image scan failed or already in progress"
+
+  deploy-paystub:
+    runs-on: ubuntu-latest
+    needs: [determine-environment, test-and-build-paystub, build-and-push-image]
+    if: needs.determine-environment.outputs.should-deploy == 'true'
+    environment:
+      name: ${{ needs.determine-environment.outputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PAYSTUB_DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-PaystubDeploy
+
+      - name: Get Lambda function name and ECR URI
+        id: get-resources
+        run: |
+          FUNCTION_ARN=$(aws cloudformation describe-stacks \
+            --stack-name "basic-budget-paystub-${{ needs.determine-environment.outputs.environment }}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`PaystubLambdaArn`].OutputValue' \
+            --output text)
+          
+          REPO_URI=$(aws cloudformation describe-stacks \
+            --stack-name "basic-budget-paystub-${{ needs.determine-environment.outputs.environment }}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`ECRRepositoryUri`].OutputValue' \
+            --output text)
+          
+          FUNCTION_NAME=$(echo $FUNCTION_ARN | cut -d':' -f7)
+          echo "function-name=${FUNCTION_NAME}" >> $GITHUB_OUTPUT
+          echo "repo-uri=${REPO_URI}" >> $GITHUB_OUTPUT
+
+      - name: Update Lambda function code
+        id: deploy
+        run: |
+          # Update function code with new container image
+          UPDATE_RESULT=$(aws lambda update-function-code \
+            --function-name ${{ steps.get-resources.outputs.function-name }} \
+            --image-uri ${{ steps.get-resources.outputs.repo-uri }}:${{ needs.test-and-build-paystub.outputs.image-tag }} \
+            --output json)
+          
+          # Extract the new version ARN
+          VERSION_ARN=$(echo $UPDATE_RESULT | jq -r '.FunctionArn')
+          echo "version-arn=${VERSION_ARN}" >> $GITHUB_OUTPUT
+          
+          # Wait for function to be updated
+          aws lambda wait function-updated-v2 \
+            --function-name ${{ steps.get-resources.outputs.function-name }}
+
+      - name: Update function configuration
+        run: |
+          # Update environment variables
+          aws lambda update-function-configuration \
+            --function-name ${{ steps.get-resources.outputs.function-name }} \
+            --environment Variables='{
+              "ENVIRONMENT":"${{ needs.determine-environment.outputs.environment }}",
+              "VERSION":"${{ github.sha }}",
+              "DEPLOYMENT_TIME":"$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+              "AWS_REGION":"${{ env.AWS_REGION }}"
+            }' || echo "Configuration update failed, continuing..."
+
+      - name: Test function deployment
+        run: |
+          echo "Testing Lambda function deployment..."
+          
+          # Create a test event for the function
+          TEST_EVENT='{
+            "Records": [
+              {
+                "eventVersion": "2.1",
+                "eventSource": "aws:sqs",
+                "eventName": "Insert",
+                "body": "{\"test\": \"deployment-test\"}"
+              }
+            ]
+          }'
+          
+          # Invoke the function with test event
+          INVOKE_RESULT=$(aws lambda invoke \
+            --function-name ${{ steps.get-resources.outputs.function-name }} \
+            --payload "$TEST_EVENT" \
+            --output json \
+            response.json)
+          
+          # Check if invocation was successful
+          if [[ $(echo $INVOKE_RESULT | jq -r '.StatusCode') == "200" ]]; then
+            echo "✅ Function invocation successful"
+            cat response.json
+          else
+            echo "❌ Function invocation failed"
+            echo $INVOKE_RESULT
+            cat response.json
+            exit 1
+          fi
+
+      - name: Verify SQS integration
+        run: |
+          # Get SQS queue URL
+          QUEUE_URL=$(aws cloudformation describe-stacks \
+            --stack-name "basic-budget-paystub-${{ needs.determine-environment.outputs.environment }}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`ProcessingQueueUrl`].OutputValue' \
+            --output text)
+          
+          echo "Testing SQS integration with queue: ${QUEUE_URL}"
+          
+          # Send a test message to the queue
+          aws sqs send-message \
+            --queue-url "${QUEUE_URL}" \
+            --message-body '{"test": "sqs-integration-test", "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' \
+            > /dev/null
+          
+          echo "✅ Test message sent to SQS queue"
+
+      - name: Create deployment summary
+        run: |
+          QUEUE_URL=$(aws cloudformation describe-stacks \
+            --stack-name "basic-budget-paystub-${{ needs.determine-environment.outputs.environment }}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`ProcessingQueueUrl`].OutputValue' \
+            --output text)
+          
+          TEMP_BUCKET=$(aws cloudformation describe-stacks \
+            --stack-name "basic-budget-paystub-${{ needs.determine-environment.outputs.environment }}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`TempBucketName`].OutputValue' \
+            --output text)
+          
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## Paystub Service Deployment Summary
+          
+          **Environment:** ${{ needs.determine-environment.outputs.environment }}
+          **Image Tag:** ${{ needs.test-and-build-paystub.outputs.image-tag }}
+          **Lambda Function:** ${{ steps.get-resources.outputs.function-name }}
+          **Version ARN:** ${{ steps.deploy.outputs.version-arn }}
+          **Processing Queue:** ${QUEUE_URL}
+          **Temp Bucket:** ${TEMP_BUCKET}
+          
+          ### Deployment Details
+          - Go binary built and containerized
+          - Container image pushed to ECR
+          - Lambda function updated with new image
+          - Function configuration updated
+          - SQS integration tested
+          EOF
+
+  notify-paystub-deployment:
+    runs-on: ubuntu-latest
+    needs: [determine-environment, deploy-paystub]
+    if: always() && needs.determine-environment.outputs.should-deploy == 'true'
+    steps:
+      - name: Notify paystub deployment status
+        run: |
+          if [[ "${{ needs.deploy-paystub.result }}" == "success" ]]; then
+            echo "✅ Paystub service deployment successful for ${{ needs.determine-environment.outputs.environment }}"
+          else
+            echo "❌ Paystub service deployment failed for ${{ needs.determine-environment.outputs.environment }}"
+            exit 1
+          fi

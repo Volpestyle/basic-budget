@@ -1,0 +1,196 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  googleId      String?   @unique
+  name          String?
+  picture       String?
+  refreshToken  String?   @db.Text
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  budgets       Budget[]
+  transactions  Transaction[]
+  paystubs      Paystub[]
+  plaidItems    PlaidItem[]
+  sessions      Session[]
+  
+  @@index([email])
+  @@index([googleId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique @db.Text
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([token])
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Budget {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  month       Int      // Format: YYYYMM
+  totalIncome Decimal  @db.Decimal(10, 2)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  categories  BudgetCategory[]
+  
+  @@unique([userId, month])
+  @@index([userId])
+  @@index([month])
+}
+
+model BudgetCategory {
+  id         String   @id @default(cuid())
+  budgetId   String
+  name       String
+  planned    Decimal  @db.Decimal(10, 2)
+  spent      Decimal  @db.Decimal(10, 2) @default(0)
+  color      String?
+  icon       String?
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  
+  budget     Budget   @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  transactions TransactionCategoryMapping[]
+  
+  @@index([budgetId])
+}
+
+model PlaidItem {
+  id                   String   @id @default(cuid())
+  userId               String
+  accessToken          String   @db.Text
+  itemId               String   @unique
+  institutionId        String?
+  institutionName      String?
+  cursor               String?  // For transaction sync
+  lastSyncedAt         DateTime?
+  isActive             Boolean  @default(true)
+  consentExpirationTime DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accounts             PlaidAccount[]
+  
+  @@index([userId])
+  @@index([itemId])
+}
+
+model PlaidAccount {
+  id              String   @id @default(cuid())
+  plaidItemId     String
+  accountId       String   @unique
+  name            String
+  officialName    String?
+  type            String   // depository, credit, loan, investment
+  subtype         String?
+  mask            String?
+  currentBalance  Decimal? @db.Decimal(10, 2)
+  availableBalance Decimal? @db.Decimal(10, 2)
+  isoCurrencyCode String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  plaidItem       PlaidItem @relation(fields: [plaidItemId], references: [id], onDelete: Cascade)
+  transactions    Transaction[]
+  
+  @@index([plaidItemId])
+  @@index([accountId])
+}
+
+model Transaction {
+  id                String   @id @default(cuid())
+  userId            String
+  plaidAccountId    String?
+  transactionId     String?  @unique // Plaid transaction ID
+  amount            Decimal  @db.Decimal(10, 2)
+  description       String
+  merchantName      String?
+  date              DateTime
+  pending           Boolean  @default(false)
+  category          String?  // Plaid category
+  subcategory       String?  // Plaid subcategory
+  isoCurrencyCode   String   @default("USD")
+  accountOwner      String?
+  isManual          Boolean  @default(false) // For manually added transactions
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plaidAccount      PlaidAccount? @relation(fields: [plaidAccountId], references: [id], onDelete: SetNull)
+  categoryMappings  TransactionCategoryMapping[]
+  
+  @@index([userId])
+  @@index([plaidAccountId])
+  @@index([transactionId])
+  @@index([date])
+}
+
+model TransactionCategoryMapping {
+  id               String   @id @default(cuid())
+  transactionId    String
+  budgetCategoryId String
+  createdAt        DateTime @default(now())
+  
+  transaction      Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  budgetCategory   BudgetCategory @relation(fields: [budgetCategoryId], references: [id], onDelete: Cascade)
+  
+  @@unique([transactionId, budgetCategoryId])
+  @@index([transactionId])
+  @@index([budgetCategoryId])
+}
+
+model Paystub {
+  id            String   @id @default(cuid())
+  userId        String
+  fileName      String
+  fileUrl       String
+  fileSize      Int
+  mimeType      String
+  uploadedAt    DateTime @default(now())
+  processedAt   DateTime?
+  
+  // Extracted data
+  employerName  String?
+  payPeriodStart DateTime?
+  payPeriodEnd  DateTime?
+  payDate       DateTime?
+  grossPay      Decimal? @db.Decimal(10, 2)
+  netPay        Decimal? @db.Decimal(10, 2)
+  federalTax    Decimal? @db.Decimal(10, 2)
+  stateTax      Decimal? @db.Decimal(10, 2)
+  socialSecurity Decimal? @db.Decimal(10, 2)
+  medicare      Decimal? @db.Decimal(10, 2)
+  metadata      Json?    // Store additional extracted data
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([payDate])
+}

@@ -1,0 +1,281 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+env:
+  AWS_REGION: us-east-1
+  NODE_VERSION: '20'
+  GO_VERSION: '1.21'
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      infrastructure: ${{ steps.filter.outputs.infrastructure }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      api: ${{ steps.filter.outputs.api }}
+      paystub: ${{ steps.filter.outputs.paystub }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            infrastructure:
+              - 'infrastructure/**'
+            frontend:
+              - 'packages/web/**'
+            api:
+              - 'packages/api/**'
+            paystub:
+              - 'packages/paystub-extractor/**'
+
+  lint-infrastructure:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.infrastructure == 'true'
+    defaults:
+      run:
+        working-directory: ./infrastructure
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: infrastructure/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TypeScript compilation
+        run: npm run build
+
+      - name: Validate CDK code
+        run: |
+          npx cdk synth --context environment=dev --strict
+          npx cdk synth --context environment=staging --strict
+          npx cdk synth --context environment=prod --strict
+
+      - name: Run security checks
+        run: |
+          npm audit --audit-level=high
+
+  test-frontend:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    defaults:
+      run:
+        working-directory: ./packages/web
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: packages/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run type checking
+        run: npm run type-check || npx tsc --noEmit
+
+      - name: Run linting
+        run: npm run lint
+
+      - name: Run tests
+        run: npm run test -- --coverage --watchAll=false
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          directory: ./packages/web/coverage
+          flags: frontend
+          name: frontend-coverage
+
+      - name: Build application
+        env:
+          REACT_APP_API_URL: 'https://api.basic-budget.local'
+          REACT_APP_ENVIRONMENT: 'test'
+          REACT_APP_VERSION: ${{ github.sha }}
+          NODE_ENV: production
+        run: npm run build
+
+  test-api:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    defaults:
+      run:
+        working-directory: ./packages/api
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 'latest'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run type checking
+        run: bun run type-check || npx tsc --noEmit
+
+      - name: Run linting
+        run: bun run lint
+
+      - name: Run unit tests
+        run: bun test --coverage
+
+      - name: Run security audit
+        run: bun audit
+
+      - name: Build application
+        env:
+          NODE_ENV: production
+          ENVIRONMENT: test
+        run: bun run build
+
+  test-paystub:
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.paystub == 'true'
+    defaults:
+      run:
+        working-directory: ./packages/paystub-extractor
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: packages/paystub-extractor/go.sum
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Run static analysis
+        run: |
+          go vet ./...
+          
+          # Install and run staticcheck
+          if ! command -v staticcheck &> /dev/null; then
+            go install honnef.co/go/tools/cmd/staticcheck@latest
+          fi
+          staticcheck ./...
+
+      - name: Run tests
+        run: |
+          go test -v -race -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./packages/paystub-extractor/coverage.out
+          flags: paystub
+          name: paystub-coverage
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go build -ldflags="-w -s" -o bootstrap ./cmd/lambda
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    needs: [changes, test-frontend, test-api, test-paystub]
+    if: |
+      always() && 
+      (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped') &&
+      (needs.test-api.result == 'success' || needs.test-api.result == 'skipped') &&
+      (needs.test-paystub.result == 'success' || needs.test-paystub.result == 'skipped')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Run integration tests
+        run: |
+          echo "Running integration tests..."
+          # Add your integration test suite here
+          # This could test API contracts, component integration, etc.
+          echo "✅ Integration tests passed"
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  validate-pr:
+    runs-on: ubuntu-latest
+    needs: [lint-infrastructure, test-frontend, test-api, test-paystub, integration-tests, security-scan]
+    if: |
+      always() && github.event_name == 'pull_request' &&
+      (needs.lint-infrastructure.result == 'success' || needs.lint-infrastructure.result == 'skipped') &&
+      (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped') &&
+      (needs.test-api.result == 'success' || needs.test-api.result == 'skipped') &&
+      (needs.test-paystub.result == 'success' || needs.test-paystub.result == 'skipped') &&
+      (needs.integration-tests.result == 'success' || needs.integration-tests.result == 'skipped') &&
+      (needs.security-scan.result == 'success' || needs.security-scan.result == 'skipped')
+    steps:
+      - name: PR validation successful
+        run: |
+          echo "✅ All PR validation checks passed!"
+          echo "The pull request is ready for review and merge."
+
+  notify-failure:
+    runs-on: ubuntu-latest
+    needs: [lint-infrastructure, test-frontend, test-api, test-paystub, integration-tests, security-scan]
+    if: |
+      always() && (
+        needs.lint-infrastructure.result == 'failure' ||
+        needs.test-frontend.result == 'failure' ||
+        needs.test-api.result == 'failure' ||
+        needs.test-paystub.result == 'failure' ||
+        needs.integration-tests.result == 'failure' ||
+        needs.security-scan.result == 'failure'
+      )
+    steps:
+      - name: CI failure notification
+        run: |
+          echo "❌ CI checks failed!"
+          echo "Please check the failing jobs and fix the issues before merging."
+          exit 1

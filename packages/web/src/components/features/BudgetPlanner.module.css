@@ -1,0 +1,157 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xl);
+}
+
+.summaryCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: var(--space-lg);
+}
+
+.summaryCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.summaryLabel {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.summaryValue {
+  font-size: var(--text-3xl);
+  font-weight: 700;
+  color: var(--color-text-primary);
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.summaryValue.excellent {
+  background: linear-gradient(135deg, var(--color-accent-success), #34d399);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.summaryValue.good {
+  color: var(--color-accent-info);
+}
+
+.summaryValue.warning {
+  color: var(--color-accent-warning);
+}
+
+.summaryPercentage {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.categoriesSection {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: var(--space-lg);
+}
+
+.categoryList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.categoryItem {
+  display: grid;
+  grid-template-columns: 20px 1fr auto auto auto;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-lg);
+  transition: all var(--transition-base);
+}
+
+.categoryItem:hover {
+  background: var(--color-bg-hover);
+}
+
+.categoryColor {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+}
+
+.categoryName {
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.categoryBudget {
+  display: flex;
+  align-items: center;
+}
+
+.budgetInput {
+  width: 120px;
+  text-align: right;
+}
+
+.categoryProgress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 200px;
+}
+
+.progressBar {
+  flex: 1;
+  height: 6px;
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  transition: all var(--transition-base);
+}
+
+.progressText {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.modalContent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  margin-top: var(--space-lg);
+}
+
+@media (max-width: 768px) {
+  .categoriesSection {
+    grid-template-columns: 1fr;
+  }
+  
+  .categoryItem {
+    grid-template-columns: 20px 1fr auto;
+  }
+  
+  .categoryProgress {
+    grid-column: 1 / -1;
+    margin-top: var(--space-sm);
+  }
+}

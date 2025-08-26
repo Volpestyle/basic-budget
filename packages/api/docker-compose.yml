@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: basic-budget-db
+    environment:
+      POSTGRES_USER: budget_user
+      POSTGRES_PASSWORD: budget_pass
+      POSTGRES_DB: basic_budget
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U budget_user -d basic_budget"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: basic-budget-cache
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: basic-budget-api
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://budget_user:budget_pass@postgres:5432/basic_budget
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: development
+      PORT: 3001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src:ro
+      - ./prisma:/app/prisma:ro
+    command: bun run dev
+
+volumes:
+  postgres_data:
+  redis_data:

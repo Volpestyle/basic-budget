@@ -1,0 +1,156 @@
+.dropzone {
+  border: 2px dashed var(--color-border-primary);
+  border-radius: var(--radius-lg);
+  padding: var(--space-2xl);
+  text-align: center;
+  cursor: pointer;
+  transition: all var(--transition-base);
+  background: var(--color-bg-tertiary);
+}
+
+.dropzone:hover {
+  border-color: var(--color-accent-primary);
+  background: var(--color-bg-elevated);
+}
+
+.dropzoneContent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.uploadIcon {
+  color: var(--color-accent-primary);
+}
+
+.dropzoneText {
+  font-size: var(--text-base);
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+.dropzoneSubtext {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.paystubList {
+  margin-top: var(--space-xl);
+}
+
+.listTitle {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-md);
+}
+
+.listItems {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.paystubItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: all var(--transition-base);
+}
+
+.paystubItem:hover {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-accent-primary);
+}
+
+.paystubIcon {
+  color: var(--color-text-secondary);
+}
+
+.paystubInfo {
+  flex: 1;
+}
+
+.paystubName {
+  font-size: var(--text-base);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.paystubDate {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.paystubAmount {
+  text-align: right;
+}
+
+.amountLabel {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.amountValue {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--color-accent-success);
+  margin: 0;
+}
+
+.previewCard {
+  margin-top: var(--space-xl);
+}
+
+.previewGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-lg);
+}
+
+.previewItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.previewLabel {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.previewValue {
+  font-size: var(--text-xl);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.previewDeductions {
+  grid-column: 1 / -1;
+  margin-top: var(--space-md);
+}
+
+.previewDeductions h5 {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-sm);
+}
+
+.deductionItem {
+  display: flex;
+  justify-content: space-between;
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--color-border-primary);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}

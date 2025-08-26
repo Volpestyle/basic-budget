@@ -1,0 +1,42 @@
+# Lambda deployment image
+FROM public.ecr.aws/lambda/provided:al2 AS lambda-base
+
+# Install build tools
+RUN yum install -y gcc make tar gzip && \
+    yum clean all
+
+# Install Tesseract and dependencies
+RUN yum install -y \
+    tesseract \
+    tesseract-langpack-eng \
+    poppler-utils \
+    ghostscript \
+    && yum clean all
+
+# Install Go
+RUN curl -L https://go.dev/dl/go1.21.0.linux-amd64.tar.gz | tar -xz -C /usr/local
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build for Lambda
+RUN CGO_ENABLED=1 GOOS=linux go build -tags lambda.norpc -o bootstrap .
+
+# Copy binary to Lambda runtime directory
+RUN cp bootstrap /var/runtime/
+
+# Set Lambda environment
+ENV RUN_MODE=lambda \
+    ENABLE_OCR=true \
+    MAX_FILE_SIZE=6291456 \
+    LOG_LEVEL=info
+
+# Lambda handler
+ENTRYPOINT ["/var/runtime/bootstrap"]

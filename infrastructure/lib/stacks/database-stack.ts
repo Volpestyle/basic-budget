@@ -1,11 +1,10 @@
 import * as cdk from 'aws-cdk-lib';
-import * as rds from 'aws-cdk-lib/aws-rds';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as rds from 'aws-cdk-lib/aws-rds';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as logs from 'aws-cdk-lib/aws-logs';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
-import { EnvironmentConfig } from '../../config/environments';
+import { EnvironmentConfig } from '../config/environment';
 
 export interface DatabaseStackProps extends cdk.StackProps {
   config: EnvironmentConfig;
@@ -14,19 +13,19 @@ export interface DatabaseStackProps extends cdk.StackProps {
 export class DatabaseStack extends cdk.Stack {
   public readonly vpc: ec2.Vpc;
   public readonly cluster: rds.DatabaseCluster;
-  public readonly secret: secretsmanager.Secret;
   public readonly proxy: rds.DatabaseProxy;
+  public readonly secret: secretsmanager.Secret;
+  public readonly securityGroup: ec2.SecurityGroup;
 
   constructor(scope: Construct, id: string, props: DatabaseStackProps) {
     super(scope, id, props);
 
-    const { config } = props;
-
-    // VPC for the database and Lambda functions
+    // VPC with public and private subnets
     this.vpc = new ec2.Vpc(this, 'VPC', {
-      vpcName: `basic-budget-vpc-${config.environment}`,
-      ipAddresses: ec2.IpAddresses.cidr('10.0.0.0/16'),
-      maxAzs: 3,
+      vpcName: `basic-budget-${props.config.environment}-vpc`,
+      cidr: '10.0.0.0/16',
+      maxAzs: props.config.database.multiAz ? 3 : 2,
+      natGateways: props.config.environment === 'prod' ? 2 : 1,
       subnetConfiguration: [
         {
           cidrMask: 24,
@@ -39,149 +38,136 @@ export class DatabaseStack extends cdk.Stack {
           subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
         },
         {
-          cidrMask: 28,
+          cidrMask: 24,
           name: 'Database',
           subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-        },
+        }
       ],
-      natGateways: config.environment === 'prod' ? 2 : 1,
       enableDnsHostnames: true,
-      enableDnsSupport: true,
+      enableDnsSupport: true
     });
+
+    // VPC Flow Logs for security monitoring
+    if (props.config.monitoring.enableDetailedMonitoring) {
+      const flowLogGroup = new logs.LogGroup(this, 'VpcFlowLogsGroup', {
+        logGroupName: `/aws/vpc/flowlogs/${props.config.environment}`,
+        retention: props.config.monitoring.retentionDays as logs.RetentionDays,
+        removalPolicy: props.config.environment === 'prod' 
+          ? cdk.RemovalPolicy.RETAIN 
+          : cdk.RemovalPolicy.DESTROY
+      });
+
+      new ec2.FlowLog(this, 'VpcFlowLogs', {
+        resourceType: ec2.FlowLogResourceType.fromVpc(this.vpc),
+        destination: ec2.FlowLogDestination.toCloudWatchLogs(flowLogGroup)
+      });
+    }
 
     // Database credentials secret
     this.secret = new secretsmanager.Secret(this, 'DatabaseSecret', {
-      secretName: `basic-budget-db-${config.environment}`,
-      description: 'Database credentials for Basic Budget',
+      secretName: `basic-budget/${props.config.environment}/database`,
+      description: `Database credentials for ${props.config.environment} environment`,
       generateSecretString: {
-        secretStringTemplate: JSON.stringify({
+        secretStringTemplate: JSON.stringify({ 
           username: 'postgres',
-          dbname: 'basic_budget',
+          dbname: 'basicbudget' 
         }),
         generateStringKey: 'password',
-        excludeCharacters: '"@/\\ \'',
-        passwordLength: 32,
-      },
+        excludeCharacters: '"@/\\\'',
+        passwordLength: 32
+      }
     });
 
-    // Security group for Aurora cluster
-    const dbSecurityGroup = new ec2.SecurityGroup(this, 'DatabaseSecurityGroup', {
+    // Database security group
+    this.securityGroup = new ec2.SecurityGroup(this, 'DatabaseSecurityGroup', {
       vpc: this.vpc,
-      description: 'Security group for Aurora PostgreSQL cluster',
-      allowAllOutbound: false,
+      description: 'Security group for RDS Aurora cluster',
+      allowAllOutbound: false
     });
 
-    // Security group for Lambda functions
+    // Lambda security group (for API and processors)
     const lambdaSecurityGroup = new ec2.SecurityGroup(this, 'LambdaSecurityGroup', {
       vpc: this.vpc,
       description: 'Security group for Lambda functions',
-      allowAllOutbound: true,
+      allowAllOutbound: true
     });
 
-    // Security group for RDS Proxy
-    const proxySecurityGroup = new ec2.SecurityGroup(this, 'ProxySecurityGroup', {
-      vpc: this.vpc,
-      description: 'Security group for RDS Proxy',
-      allowAllOutbound: true,
-    });
-
-    // Allow Lambda to connect to RDS Proxy
-    proxySecurityGroup.addIngressRule(
+    // Allow Lambda to connect to database
+    this.securityGroup.addIngressRule(
       lambdaSecurityGroup,
       ec2.Port.tcp(5432),
-      'Lambda to RDS Proxy'
+      'Allow Lambda functions to connect to database'
     );
 
-    // Allow RDS Proxy to connect to Aurora
-    dbSecurityGroup.addIngressRule(
-      proxySecurityGroup,
-      ec2.Port.tcp(5432),
-      'RDS Proxy to Aurora'
-    );
-
-    // Subnet group for Aurora
+    // RDS Subnet Group
     const subnetGroup = new rds.SubnetGroup(this, 'DatabaseSubnetGroup', {
-      description: 'Subnet group for Aurora PostgreSQL',
+      description: 'Subnet group for Aurora cluster',
       vpc: this.vpc,
       vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-      },
+        subnetType: ec2.SubnetType.PRIVATE_ISOLATED
+      }
     });
 
-    // Aurora Serverless v2 cluster
-    this.cluster = new rds.DatabaseCluster(this, 'Database', {
-      clusterIdentifier: `basic-budget-${config.environment}`,
+    // Parameter Group for performance optimization
+    const parameterGroup = new rds.ParameterGroup(this, 'DatabaseParameterGroup', {
       engine: rds.DatabaseClusterEngine.auroraPostgres({
-        version: rds.AuroraPostgresEngineVersion.VER_15_4,
+        version: rds.AuroraPostgresEngineVersion.VER_15_3
       }),
-      serverlessV2MinCapacity: config.database.minCapacity,
-      serverlessV2MaxCapacity: config.database.maxCapacity,
-      writer: rds.ClusterInstance.serverlessV2('writer', {
-        publiclyAccessible: false,
-        enablePerformanceInsights: config.monitoring.enableDetailedMonitoring,
-        performanceInsightRetention: config.monitoring.enableDetailedMonitoring
-          ? rds.PerformanceInsightRetention.DEFAULT
-          : undefined,
-      }),
-      readers: config.environment === 'prod' ? [
-        rds.ClusterInstance.serverlessV2('reader', {
-          scaleWithWriter: true,
-          publiclyAccessible: false,
-          enablePerformanceInsights: config.monitoring.enableDetailedMonitoring,
-        }),
-      ] : undefined,
-      credentials: rds.Credentials.fromSecret(this.secret),
-      vpc: this.vpc,
-      securityGroups: [dbSecurityGroup],
-      subnetGroup,
-      defaultDatabaseName: 'basic_budget',
-      backup: {
-        retention: config.environment === 'prod' ? cdk.Duration.days(7) : cdk.Duration.days(1),
-        preferredWindow: '03:00-04:00',
-      },
-      preferredMaintenanceWindow: 'Sun:04:00-Sun:05:00',
-      cloudwatchLogsExports: ['postgresql'],
-      cloudwatchLogsRetention: config.monitoring.logRetentionDays,
-      deletionProtection: config.environment === 'prod',
-      removalPolicy: config.environment === 'prod' ? cdk.RemovalPolicy.SNAPSHOT : cdk.RemovalPolicy.DESTROY,
-      storageEncrypted: true,
-      monitoringInterval: config.monitoring.enableDetailedMonitoring ? cdk.Duration.seconds(60) : undefined,
+      description: `Parameter group for ${props.config.environment} Aurora cluster`,
+      parameters: {
+        'shared_preload_libraries': 'pg_stat_statements',
+        'log_statement': 'all',
+        'log_duration': '1',
+        'log_min_duration_statement': '1000', // Log queries taking more than 1 second
+        'max_connections': props.config.environment === 'prod' ? '200' : '100'
+      }
     });
 
-    // Enable Data API if configured
-    if (config.database.enableDataAPI) {
-      (this.cluster.node.defaultChild as rds.CfnDBCluster).enableHttpEndpoint = true;
-    }
-
-    // IAM role for RDS Proxy
-    const proxyRole = new iam.Role(this, 'ProxyRole', {
-      assumedBy: new iam.ServicePrincipal('rds.amazonaws.com'),
-      inlinePolicies: {
-        SecretsManagerPolicy: new iam.PolicyDocument({
-          statements: [
-            new iam.PolicyStatement({
-              effect: iam.Effect.ALLOW,
-              actions: [
-                'secretsmanager:GetSecretValue',
-                'secretsmanager:DescribeSecret',
-              ],
-              resources: [this.secret.secretArn],
-            }),
-            new iam.PolicyStatement({
-              effect: iam.Effect.ALLOW,
-              actions: [
-                'kms:Decrypt',
-              ],
-              resources: ['*'],
-              conditions: {
-                StringEquals: {
-                  'kms:ViaService': `secretsmanager.${cdk.Aws.REGION}.amazonaws.com`,
-                },
-              },
-            }),
-          ],
-        }),
+    // Aurora Serverless v2 Cluster
+    this.cluster = new rds.DatabaseCluster(this, 'DatabaseCluster', {
+      clusterIdentifier: `basic-budget-${props.config.environment}-cluster`,
+      engine: rds.DatabaseClusterEngine.auroraPostgres({
+        version: rds.AuroraPostgresEngineVersion.VER_15_3
+      }),
+      credentials: rds.Credentials.fromSecret(this.secret),
+      writer: rds.ClusterInstance.serverlessV2('writer', {
+        scaleWithWriter: true,
+        autoMinorVersionUpgrade: true
+      }),
+      readers: props.config.database.multiAz ? [
+        rds.ClusterInstance.serverlessV2('reader1', {
+          scaleWithWriter: true,
+          autoMinorVersionUpgrade: true
+        })
+      ] : [],
+      serverlessV2MinCapacity: props.config.database.minCapacity,
+      serverlessV2MaxCapacity: props.config.database.maxCapacity,
+      vpc: this.vpc,
+      securityGroups: [this.securityGroup],
+      subnetGroup,
+      parameterGroup,
+      backup: {
+        retention: cdk.Duration.days(props.config.database.backupRetention),
+        preferredWindow: '03:00-04:00'
       },
+      preferredMaintenanceWindow: 'sun:04:00-sun:05:00',
+      cloudwatchLogsExports: ['postgresql'],
+      cloudwatchLogsRetention: props.config.monitoring.retentionDays as logs.RetentionDays,
+      monitoringInterval: props.config.database.enablePerformanceInsights 
+        ? cdk.Duration.seconds(60) 
+        : undefined,
+      monitoringRole: props.config.database.enablePerformanceInsights 
+        ? new cdk.aws_iam.Role(this, 'MonitoringRole', {
+            assumedBy: new cdk.aws_iam.ServicePrincipal('monitoring.rds.amazonaws.com'),
+            managedPolicies: [
+              cdk.aws_iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonRDSEnhancedMonitoringRole')
+            ]
+          })
+        : undefined,
+      deletionProtection: props.config.environment === 'prod',
+      removalPolicy: props.config.environment === 'prod' 
+        ? cdk.RemovalPolicy.RETAIN 
+        : cdk.RemovalPolicy.DESTROY
     });
 
     // RDS Proxy for connection pooling
@@ -189,108 +175,93 @@ export class DatabaseStack extends cdk.Stack {
       proxyTarget: rds.ProxyTarget.fromCluster(this.cluster),
       secrets: [this.secret],
       vpc: this.vpc,
-      vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-      },
-      securityGroups: [proxySecurityGroup],
-      role: proxyRole,
-      dbProxyName: `basic-budget-proxy-${config.environment}`,
-      debugLogging: config.environment !== 'prod',
+      securityGroups: [this.securityGroup],
+      debugLogging: props.config.environment !== 'prod',
       idleClientTimeout: cdk.Duration.minutes(30),
       maxConnectionsPercent: 100,
       maxIdleConnectionsPercent: 50,
-      requireTLS: true,
+      requireTLS: true
     });
 
-    // CloudWatch alarms for monitoring
-    if (config.monitoring.enableDetailedMonitoring) {
-      // High CPU alarm
-      this.cluster.metricCPUUtilization().createAlarm(this, 'HighCPUAlarm', {
+    // CloudWatch Alarms for database monitoring
+    if (props.config.monitoring.enableDetailedMonitoring) {
+      const cpuAlarm = new cdk.aws_cloudwatch.Alarm(this, 'DatabaseCPUAlarm', {
+        metric: new cdk.aws_cloudwatch.Metric({
+          namespace: 'AWS/RDS',
+          metricName: 'CPUUtilization',
+          dimensionsMap: {
+            DBClusterIdentifier: this.cluster.clusterIdentifier
+          },
+          statistic: 'Average',
+          period: cdk.Duration.minutes(5)
+        }),
         threshold: 80,
         evaluationPeriods: 2,
-        alarmDescription: 'Aurora CPU utilization is too high',
+        treatMissingData: cdk.aws_cloudwatch.TreatMissingData.NOT_BREACHING,
+        alarmDescription: 'Database CPU utilization is high'
       });
 
-      // High connection count alarm
-      this.cluster.metricDatabaseConnections().createAlarm(this, 'HighConnectionsAlarm', {
+      const connectionAlarm = new cdk.aws_cloudwatch.Alarm(this, 'DatabaseConnectionAlarm', {
+        metric: new cdk.aws_cloudwatch.Metric({
+          namespace: 'AWS/RDS',
+          metricName: 'DatabaseConnections',
+          dimensionsMap: {
+            DBClusterIdentifier: this.cluster.clusterIdentifier
+          },
+          statistic: 'Average',
+          period: cdk.Duration.minutes(5)
+        }),
         threshold: 80,
         evaluationPeriods: 2,
-        alarmDescription: 'Aurora connection count is too high',
-      });
-
-      // Low freeable memory alarm
-      this.cluster.metricFreeableMemory().createAlarm(this, 'LowMemoryAlarm', {
-        threshold: 1000000000, // 1 GB in bytes
-        evaluationPeriods: 2,
-        comparisonOperator: cdk.aws_cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
-        alarmDescription: 'Aurora freeable memory is too low',
+        treatMissingData: cdk.aws_cloudwatch.TreatMissingData.NOT_BREACHING,
+        alarmDescription: 'Database connection count is high'
       });
     }
 
-    // VPC Endpoints for cost optimization (avoid NAT Gateway charges for AWS services)
-    if (config.environment === 'prod') {
-      // S3 Gateway endpoint
-      this.vpc.addGatewayEndpoint('S3Endpoint', {
-        service: ec2.GatewayVpcEndpointAwsService.S3,
-        subnets: [{ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }],
-      });
+    // SSM Parameters for other stacks to reference
+    new cdk.aws_ssm.StringParameter(this, 'VpcIdParameter', {
+      parameterName: `/basic-budget/${props.config.environment}/vpc-id`,
+      stringValue: this.vpc.vpcId
+    });
 
-      // DynamoDB Gateway endpoint
-      this.vpc.addGatewayEndpoint('DynamoDBEndpoint', {
-        service: ec2.GatewayVpcEndpointAwsService.DYNAMODB,
-        subnets: [{ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }],
-      });
+    new cdk.aws_ssm.StringParameter(this, 'DatabaseEndpointParameter', {
+      parameterName: `/basic-budget/${props.config.environment}/database-endpoint`,
+      stringValue: this.cluster.clusterEndpoint.hostname
+    });
 
-      // Interface endpoints for other services
-      const interfaceEndpoints = [
-        ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
-        ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS,
-        ec2.InterfaceVpcEndpointAwsService.LAMBDA,
-      ];
+    new cdk.aws_ssm.StringParameter(this, 'DatabaseProxyEndpointParameter', {
+      parameterName: `/basic-budget/${props.config.environment}/database-proxy-endpoint`,
+      stringValue: this.proxy.endpoint
+    });
 
-      interfaceEndpoints.forEach((service, index) => {
-        this.vpc.addInterfaceEndpoint(`InterfaceEndpoint${index}`, {
-          service,
-          subnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-          privateDnsEnabled: true,
-        });
-      });
-    }
+    new cdk.aws_ssm.StringParameter(this, 'LambdaSecurityGroupParameter', {
+      parameterName: `/basic-budget/${props.config.environment}/lambda-security-group-id`,
+      stringValue: lambdaSecurityGroup.securityGroupId
+    });
 
     // Outputs
     new cdk.CfnOutput(this, 'VpcId', {
       value: this.vpc.vpcId,
-      description: 'VPC ID',
-      exportName: `basic-budget-${config.environment}-vpc-id`,
+      exportName: `basic-budget-${props.config.environment}-vpc-id`
     });
 
     new cdk.CfnOutput(this, 'DatabaseEndpoint', {
       value: this.cluster.clusterEndpoint.hostname,
-      description: 'Aurora cluster endpoint',
-      exportName: `basic-budget-${config.environment}-db-endpoint`,
+      exportName: `basic-budget-${props.config.environment}-db-endpoint`
     });
 
     new cdk.CfnOutput(this, 'DatabaseProxyEndpoint', {
       value: this.proxy.endpoint,
-      description: 'RDS Proxy endpoint',
-      exportName: `basic-budget-${config.environment}-proxy-endpoint`,
+      exportName: `basic-budget-${props.config.environment}-db-proxy-endpoint`
     });
 
     new cdk.CfnOutput(this, 'DatabaseSecretArn', {
       value: this.secret.secretArn,
-      description: 'Database credentials secret ARN',
-      exportName: `basic-budget-${config.environment}-db-secret-arn`,
+      exportName: `basic-budget-${props.config.environment}-db-secret-arn`
     });
 
-    new cdk.CfnOutput(this, 'LambdaSecurityGroupId', {
-      value: lambdaSecurityGroup.securityGroupId,
-      description: 'Security group for Lambda functions',
-      exportName: `basic-budget-${config.environment}-lambda-sg-id`,
-    });
-
-    // Tags
-    cdk.Tags.of(this).add('Stack', 'Database');
-    Object.entries(config.tags).forEach(([key, value]) => {
+    // Apply tags
+    Object.entries(props.config.tags).forEach(([key, value]) => {
       cdk.Tags.of(this).add(key, value);
     });
   }

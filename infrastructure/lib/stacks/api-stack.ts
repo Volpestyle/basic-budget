@@ -1,294 +1,306 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as apigatewayv2 from '@aws-cdk/aws-apigatewayv2-alpha';
-import * as integrations from '@aws-cdk/aws-apigatewayv2-integrations-alpha';
-import * as authorizers from '@aws-cdk/aws-apigatewayv2-authorizers-alpha';
+import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs';
-import { EnvironmentConfig } from '../../config/environments';
+import { EnvironmentConfig } from '../config/environment';
+import { SecurityConstruct } from '../constructs/security';
 
 export interface ApiStackProps extends cdk.StackProps {
   config: EnvironmentConfig;
-  vpc: ec2.Vpc;
-  databaseSecret: secretsmanager.Secret;
-  rdsProxyEndpoint: string;
+  vpc: ec2.IVpc;
+  databaseSecurityGroup: ec2.ISecurityGroup;
+  lambdaSecurityGroup: ec2.ISecurityGroup;
+  wafWebAcl?: string;
 }
 
 export class ApiStack extends cdk.Stack {
-  public readonly api: apigatewayv2.HttpApi;
-  public readonly lambdaFunction: lambda.Function;
-  public readonly jwtAuthorizer: authorizers.HttpJwtAuthorizer;
+  public readonly api: apigatewayv2.CfnApi;
+  public readonly apiFunction: lambda.Function;
+  public readonly authFunction: lambda.Function;
 
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, props);
 
-    const { config, vpc, databaseSecret, rdsProxyEndpoint } = props;
+    // Security construct
+    const security = new SecurityConstruct(this, 'Security', {
+      config: props.config
+    });
 
     // JWT Secret for authentication
     const jwtSecret = new secretsmanager.Secret(this, 'JWTSecret', {
-      secretName: `basic-budget-${config.environment}-jwt-secret`,
-      description: 'JWT secret for Basic Budget API authentication',
+      secretName: `basic-budget/${props.config.environment}/jwt-secret`,
+      description: `JWT signing secret for ${props.config.environment} environment`,
       generateSecretString: {
-        secretStringTemplate: '{}',
+        secretStringTemplate: JSON.stringify({}),
         generateStringKey: 'secret',
         excludeCharacters: '"@/\\\'',
-        passwordLength: 64,
-      },
+        passwordLength: 64
+      }
     });
 
-    // Lambda execution role
-    const lambdaRole = new iam.Role(this, 'ApiLambdaRole', {
-      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole'),
-      ],
-      inlinePolicies: {
-        SecretsManagerPolicy: new iam.PolicyDocument({
-          statements: [
-            new iam.PolicyStatement({
-              effect: iam.Effect.ALLOW,
-              actions: [
-                'secretsmanager:GetSecretValue',
-                'secretsmanager:DescribeSecret',
-              ],
-              resources: [
-                databaseSecret.secretArn,
-                jwtSecret.secretArn,
-              ],
-            }),
-          ],
-        }),
-        RDSProxyPolicy: new iam.PolicyDocument({
-          statements: [
-            new iam.PolicyStatement({
-              effect: iam.Effect.ALLOW,
-              actions: [
-                'rds-db:connect',
-              ],
-              resources: [`arn:aws:rds-db:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:dbuser:*/basic-budget-api`],
-            }),
-          ],
-        }),
-      },
+    // Lambda Layer for shared dependencies
+    const sharedLayer = new lambda.LayerVersion(this, 'SharedLayer', {
+      layerVersionName: `basic-budget-${props.config.environment}-shared`,
+      code: lambda.Code.fromAsset('layers/shared'), // You'll need to create this
+      compatibleRuntimes: [lambda.Runtime.NODEJS_18_X],
+      description: 'Shared utilities and dependencies'
     });
 
-    // Lambda function for API
-    this.lambdaFunction = new lambda.Function(this, 'ApiFunction', {
-      functionName: `basic-budget-api-${config.environment}`,
-      runtime: lambda.Runtime.NODEJS_20_X,
+    // JWT Authorizer Lambda Function
+    this.authFunction = new lambda.Function(this, 'AuthorizerFunction', {
+      functionName: `basic-budget-${props.config.environment}-authorizer`,
+      runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'index.handler',
-      code: lambda.Code.fromAsset('../packages/api', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_20_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm run build',
-              'cp -R dist/* /asset-output/',
-              'cp package.json /asset-output/',
-              'cd /asset-output && npm install --production',
-            ].join(' && '),
-          ],
-        },
-      }),
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(config.lambda.timeout),
-      memorySize: config.lambda.memorySize,
-      vpc: vpc,
+      code: lambda.Code.fromAsset('lambdas/authorizer'), // You'll need to create this
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 256,
+      environment: {
+        JWT_SECRET_ARN: jwtSecret.secretArn,
+        NODE_ENV: props.config.environment
+      },
+      role: security.lambdaExecutionRole,
+      layers: [sharedLayer],
+      logRetention: props.config.monitoring.retentionDays as logs.RetentionDays,
+      tracing: props.config.monitoring.enableXRay 
+        ? lambda.Tracing.ACTIVE 
+        : lambda.Tracing.DISABLED
+    });
+
+    // Grant access to JWT secret
+    jwtSecret.grantRead(this.authFunction);
+
+    // Main API Lambda Function
+    this.apiFunction = new lambda.Function(this, 'ApiFunction', {
+      functionName: `basic-budget-${props.config.environment}-api`,
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset('lambdas/api'), // You'll need to create this
+      timeout: cdk.Duration.seconds(props.config.lambda.timeout),
+      memorySize: props.config.lambda.memorySize,
+      reservedConcurrentExecutions: props.config.lambda.reservedConcurrency,
+      vpc: props.vpc,
+      securityGroups: [props.lambdaSecurityGroup],
       vpcSubnets: {
-        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS
       },
       environment: {
-        NODE_ENV: config.environment,
-        DATABASE_SECRET_ARN: databaseSecret.secretArn,
+        NODE_ENV: props.config.environment,
+        DATABASE_PROXY_ENDPOINT: cdk.aws_ssm.StringParameter.valueFromLookup(
+          this, `/basic-budget/${props.config.environment}/database-proxy-endpoint`
+        ),
+        DATABASE_SECRET_ARN: cdk.aws_ssm.StringParameter.valueFromLookup(
+          this, `/basic-budget/${props.config.environment}/database-secret-arn`
+        ),
         JWT_SECRET_ARN: jwtSecret.secretArn,
-        RDS_PROXY_ENDPOINT: rdsProxyEndpoint,
-        LOG_LEVEL: config.environment === 'prod' ? 'warn' : 'debug',
+        REDIS_ENDPOINT: cdk.aws_ssm.StringParameter.valueFromLookup(
+          this, `/basic-budget/${props.config.environment}/redis-endpoint`
+        ),
+        LOG_LEVEL: props.config.environment === 'prod' ? 'info' : 'debug'
       },
-      logGroup: new logs.LogGroup(this, 'ApiLogGroup', {
-        logGroupName: `/aws/lambda/basic-budget-api-${config.environment}`,
-        retention: config.monitoring.logRetentionDays,
-        removalPolicy: config.environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
-      }),
+      role: security.apiLambdaRole,
+      layers: [sharedLayer],
+      logRetention: props.config.monitoring.retentionDays as logs.RetentionDays,
+      tracing: props.config.monitoring.enableXRay 
+        ? lambda.Tracing.ACTIVE 
+        : lambda.Tracing.DISABLED,
       deadLetterQueueEnabled: true,
-      reservedConcurrentExecutions: config.environment === 'prod' ? 100 : 10,
+      onFailure: new cdk.aws_lambda_destinations.SqsDestination(
+        new cdk.aws_sqs.Queue(this, 'ApiDLQ', {
+          queueName: `basic-budget-${props.config.environment}-api-dlq`,
+          retentionPeriod: cdk.Duration.days(14)
+        })
+      )
     });
 
-    // JWT Authorizer
-    this.jwtAuthorizer = new authorizers.HttpJwtAuthorizer('JwtAuthorizer', {
-      jwtAudience: [`basic-budget-${config.environment}`],
-      jwtIssuer: `https://basic-budget-${config.environment}.auth.amazonaws.com`, // Update with your auth provider
-    });
+    // Grant database and secrets access
+    const databaseSecret = secretsmanager.Secret.fromSecretNameV2(
+      this, 'DatabaseSecret', 
+      `basic-budget/${props.config.environment}/database`
+    );
+    databaseSecret.grantRead(this.apiFunction);
+    jwtSecret.grantRead(this.apiFunction);
 
-    // API Gateway v2
-    this.api = new apigatewayv2.HttpApi(this, 'HttpApi', {
-      apiName: `basic-budget-api-${config.environment}`,
-      description: `Basic Budget API for ${config.environment} environment`,
-      corsPreflight: {
-        allowCredentials: true,
-        allowHeaders: ['Content-Type', 'Authorization', 'X-Amz-Date', 'X-Api-Key', 'X-Amz-Security-Token'],
-        allowMethods: [
-          apigatewayv2.CorsHttpMethod.GET,
-          apigatewayv2.CorsHttpMethod.POST,
-          apigatewayv2.CorsHttpMethod.PUT,
-          apigatewayv2.CorsHttpMethod.PATCH,
-          apigatewayv2.CorsHttpMethod.DELETE,
-          apigatewayv2.CorsHttpMethod.OPTIONS,
-        ],
-        allowOrigins: config.environment === 'prod' 
-          ? [config.domainName ? `https://${config.domainName}` : '*']
+    // API Gateway HTTP API v2 (using CFN construct for more control)
+    this.api = new apigatewayv2.CfnApi(this, 'HttpApi', {
+      name: `basic-budget-${props.config.environment}-api`,
+      description: `Basic Budget API - ${props.config.environment}`,
+      protocolType: 'HTTP',
+      corsConfiguration: {
+        allowOrigins: props.config.environment === 'prod' 
+          ? ['https://basicbudget.com'] 
           : ['*'],
-        maxAge: cdk.Duration.days(1),
-      },
-      defaultAuthorizer: this.jwtAuthorizer,
+        allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        allowHeaders: [
+          'Content-Type',
+          'X-Amz-Date',
+          'Authorization',
+          'X-Api-Key',
+          'X-Amz-Security-Token',
+          'X-Amz-User-Agent'
+        ],
+        maxAge: 86400
+      }
     });
 
     // Lambda integration
-    const lambdaIntegration = new integrations.HttpLambdaIntegration('ApiIntegration', this.lambdaFunction, {
-      payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0,
+    const lambdaIntegration = new apigatewayv2.CfnIntegration(this, 'LambdaIntegration', {
+      apiId: this.api.ref,
+      integrationType: 'AWS_PROXY',
+      integrationUri: `arn:aws:apigateway:${this.region}:lambda:path/2015-03-31/functions/${this.apiFunction.functionArn}/invocations`,
+      payloadFormatVersion: '2.0'
     });
 
-    // Routes
-    const routes = [
-      { method: apigatewayv2.HttpMethod.GET, path: '/api/health' },
-      { method: apigatewayv2.HttpMethod.GET, path: '/api/budgets' },
-      { method: apigatewayv2.HttpMethod.POST, path: '/api/budgets' },
-      { method: apigatewayv2.HttpMethod.GET, path: '/api/budgets/{id}' },
-      { method: apigatewayv2.HttpMethod.PUT, path: '/api/budgets/{id}' },
-      { method: apigatewayv2.HttpMethod.DELETE, path: '/api/budgets/{id}' },
-      { method: apigatewayv2.HttpMethod.GET, path: '/api/transactions' },
-      { method: apigatewayv2.HttpMethod.POST, path: '/api/transactions' },
-      { method: apigatewayv2.HttpMethod.GET, path: '/api/transactions/{id}' },
-      { method: apigatewayv2.HttpMethod.PUT, path: '/api/transactions/{id}' },
-      { method: apigatewayv2.HttpMethod.DELETE, path: '/api/transactions/{id}' },
-      { method: apigatewayv2.HttpMethod.GET, path: '/api/categories' },
-      { method: apigatewayv2.HttpMethod.POST, path: '/api/categories' },
-    ];
+    // Lambda authorizer
+    const authorizer = new apigatewayv2.CfnAuthorizer(this, 'JWTAuthorizer', {
+      apiId: this.api.ref,
+      authorizerType: 'REQUEST',
+      name: `basic-budget-${props.config.environment}-jwt-authorizer`,
+      authorizerUri: `arn:aws:apigateway:${this.region}:lambda:path/2015-03-31/functions/${this.authFunction.functionArn}/invocations`,
+      identitySource: ['$request.header.Authorization'],
+      authorizerResultTtlInSeconds: 300
+    });
+
+    // API Routes
+    new apigatewayv2.CfnRoute(this, 'ProxyRoute', {
+      apiId: this.api.ref,
+      routeKey: 'ANY /{proxy+}',
+      target: `integrations/${lambdaIntegration.ref}`,
+      authorizerId: authorizer.ref
+    });
 
     // Health check route without authorization
-    this.api.addRoutes({
-      path: '/api/health',
-      methods: [apigatewayv2.HttpMethod.GET],
-      integration: lambdaIntegration,
+    new apigatewayv2.CfnRoute(this, 'HealthRoute', {
+      apiId: this.api.ref,
+      routeKey: 'GET /health',
+      target: `integrations/${lambdaIntegration.ref}`
     });
 
-    // Protected routes with JWT authorization
-    routes.filter(route => route.path !== '/api/health').forEach(route => {
-      this.api.addRoutes({
-        path: route.path,
-        methods: [route.method],
-        integration: lambdaIntegration,
-        authorizer: this.jwtAuthorizer,
-      });
+    // Grant API Gateway permission to invoke Lambda
+    this.apiFunction.addPermission('ApiGatewayInvoke', {
+      principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${this.api.ref}/*/*`
     });
 
-    // Custom domain (if configured)
-    if (config.domainName && config.certificateArn) {
-      const domainName = new apigatewayv2.DomainName(this, 'ApiDomain', {
-        domainName: `api.${config.environment === 'prod' ? '' : config.environment + '.'}${config.domainName}`,
-        certificate: cdk.aws_certificatemanager.Certificate.fromCertificateArn(
-          this,
-          'ApiCertificate',
-          config.certificateArn
-        ),
-      });
+    this.authFunction.addPermission('ApiGatewayInvokeAuth', {
+      principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${this.api.ref}/*/*`
+    });
 
-      new apigatewayv2.ApiMapping(this, 'ApiMapping', {
-        api: this.api,
-        domainName: domainName,
+    // API Stage
+    const stage = new apigatewayv2.CfnStage(this, 'ApiStage', {
+      apiId: this.api.ref,
+      stageName: props.config.environment,
+      autoDeploy: true,
+      defaultRouteSettings: {
+        throttlingRateLimit: props.config.apiGateway.throttleRateLimit,
+        throttlingBurstLimit: props.config.apiGateway.throttleBurstLimit
+      }
+    });
+
+    // CloudWatch Log Group for API Gateway
+    const logGroup = new logs.LogGroup(this, 'ApiLogGroup', {
+      logGroupName: `/aws/apigateway/basic-budget-${props.config.environment}`,
+      retention: props.config.monitoring.retentionDays as logs.RetentionDays,
+      removalPolicy: props.config.environment === 'prod' 
+        ? cdk.RemovalPolicy.RETAIN 
+        : cdk.RemovalPolicy.DESTROY
+    });
+
+    // Associate WAF if enabled
+    if (props.wafWebAcl) {
+      new cdk.aws_wafv2.CfnWebACLAssociation(this, 'ApiWafAssociation', {
+        webAclArn: props.wafWebAcl,
+        resourceArn: `arn:aws:apigateway:${this.region}::/restapis/${this.api.ref}/stages/${stage.stageName}`
       });
     }
 
-    // API Gateway logging
-    const apiLogGroup = new logs.LogGroup(this, 'ApiAccessLogGroup', {
-      logGroupName: `/aws/apigateway/basic-budget-${config.environment}`,
-      retention: config.monitoring.logRetentionDays,
-      removalPolicy: config.environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
-    });
-
-    const stage = this.api.defaultStage?.node.defaultChild as apigatewayv2.CfnStage;
-    if (stage) {
-      stage.accessLogSettings = {
-        destinationArn: apiLogGroup.logGroupArn,
-        format: JSON.stringify({
-          requestId: '$context.requestId',
-          ip: '$context.identity.sourceIp',
-          caller: '$context.identity.caller',
-          user: '$context.identity.user',
-          requestTime: '$context.requestTime',
-          httpMethod: '$context.httpMethod',
-          resourcePath: '$context.resourcePath',
-          status: '$context.status',
-          protocol: '$context.protocol',
-          responseLength: '$context.responseLength',
-          errorMessage: '$context.error.message',
-          errorMessageString: '$context.error.messageString',
-          integrationErrorMessage: '$context.integrationErrorMessage',
-          integrationLatency: '$context.integrationLatency',
-          responseLatency: '$context.responseLatency',
+    // CloudWatch Alarms
+    if (props.config.monitoring.enableDetailedMonitoring) {
+      // API Gateway 4XX errors
+      new cdk.aws_cloudwatch.Alarm(this, 'Api4XXErrorAlarm', {
+        alarmName: `api-4xx-errors-${props.config.environment}`,
+        metric: new cdk.aws_cloudwatch.Metric({
+          namespace: 'AWS/ApiGateway',
+          metricName: '4XXError',
+          dimensionsMap: {
+            ApiId: this.api.ref
+          },
+          statistic: 'Sum',
+          period: cdk.Duration.minutes(5)
         }),
-      };
+        threshold: 10,
+        evaluationPeriods: 2,
+        treatMissingData: cdk.aws_cloudwatch.TreatMissingData.NOT_BREACHING
+      });
+
+      // API Gateway 5XX errors
+      new cdk.aws_cloudwatch.Alarm(this, 'Api5XXErrorAlarm', {
+        alarmName: `api-5xx-errors-${props.config.environment}`,
+        metric: new cdk.aws_cloudwatch.Metric({
+          namespace: 'AWS/ApiGateway',
+          metricName: '5XXError',
+          dimensionsMap: {
+            ApiId: this.api.ref
+          },
+          statistic: 'Sum',
+          period: cdk.Duration.minutes(5)
+        }),
+        threshold: 5,
+        evaluationPeriods: 2,
+        treatMissingData: cdk.aws_cloudwatch.TreatMissingData.NOT_BREACHING
+      });
+
+      // API Gateway latency
+      new cdk.aws_cloudwatch.Alarm(this, 'ApiLatencyAlarm', {
+        alarmName: `api-latency-${props.config.environment}`,
+        metric: new cdk.aws_cloudwatch.Metric({
+          namespace: 'AWS/ApiGateway',
+          metricName: 'Latency',
+          dimensionsMap: {
+            ApiId: this.api.ref
+          },
+          statistic: 'Average',
+          period: cdk.Duration.minutes(5)
+        }),
+        threshold: 5000, // 5 seconds
+        evaluationPeriods: 3,
+        treatMissingData: cdk.aws_cloudwatch.TreatMissingData.NOT_BREACHING
+      });
     }
 
-    // IAM role for GitHub Actions deployment
-    const deploymentRole = new iam.Role(this, 'ApiDeploymentRole', {
-      roleName: `basic-budget-api-deploy-${config.environment}`,
-      assumedBy: new iam.WebIdentityPrincipal(
-        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:oidc-provider/token.actions.githubusercontent.com`,
-        {
-          StringEquals: {
-            'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-          },
-          StringLike: {
-            'token.actions.githubusercontent.com:sub': 'repo:*/basic-budget:*', // Update with your GitHub repo
-          },
-        }
-      ),
-      inlinePolicies: {
-        LambdaDeploymentPolicy: new iam.PolicyDocument({
-          statements: [
-            new iam.PolicyStatement({
-              effect: iam.Effect.ALLOW,
-              actions: [
-                'lambda:UpdateFunctionCode',
-                'lambda:UpdateFunctionConfiguration',
-                'lambda:GetFunction',
-                'lambda:PublishVersion',
-                'lambda:UpdateAlias',
-                'lambda:CreateAlias',
-              ],
-              resources: [this.lambdaFunction.functionArn],
-            }),
-          ],
-        }),
-      },
+    // SSM Parameters for other stacks
+    new cdk.aws_ssm.StringParameter(this, 'ApiEndpointParameter', {
+      parameterName: `/basic-budget/${props.config.environment}/api-endpoint`,
+      stringValue: `https://${this.api.ref}.execute-api.${this.region}.amazonaws.com/${stage.stageName}`
+    });
+
+    new cdk.aws_ssm.StringParameter(this, 'ApiIdParameter', {
+      parameterName: `/basic-budget/${props.config.environment}/api-id`,
+      stringValue: this.api.ref
     });
 
     // Outputs
-    new cdk.CfnOutput(this, 'ApiUrl', {
-      value: this.api.url!,
-      description: 'API Gateway URL',
-      exportName: `basic-budget-${config.environment}-api-url`,
+    new cdk.CfnOutput(this, 'ApiEndpoint', {
+      value: `https://${this.api.ref}.execute-api.${this.region}.amazonaws.com/${stage.stageName}`,
+      exportName: `basic-budget-${props.config.environment}-api-endpoint`
     });
 
-    new cdk.CfnOutput(this, 'LambdaFunctionArn', {
-      value: this.lambdaFunction.functionArn,
-      description: 'API Lambda Function ARN',
-      exportName: `basic-budget-${config.environment}-api-lambda-arn`,
+    new cdk.CfnOutput(this, 'ApiId', {
+      value: this.api.ref,
+      exportName: `basic-budget-${props.config.environment}-api-id`
     });
 
-    new cdk.CfnOutput(this, 'ApiDeploymentRoleArn', {
-      value: deploymentRole.roleArn,
-      description: 'GitHub Actions API Deployment Role ARN',
-      exportName: `basic-budget-${config.environment}-api-deploy-role`,
+    new cdk.CfnOutput(this, 'ApiFunctionName', {
+      value: this.apiFunction.functionName,
+      exportName: `basic-budget-${props.config.environment}-api-function-name`
     });
 
-    // Tags
-    cdk.Tags.of(this).add('Stack', 'API');
-    Object.entries(config.tags).forEach(([key, value]) => {
+    // Apply tags
+    Object.entries(props.config.tags).forEach(([key, value]) => {
       cdk.Tags.of(this).add(key, value);
     });
   }

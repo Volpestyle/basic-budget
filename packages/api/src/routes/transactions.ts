@@ -1,542 +1,448 @@
 import { Hono } from 'hono';
-import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { Prisma } from '@prisma/client';
-import { prisma } from '@/lib/prisma';
-import { cache } from '@/lib/cache';
-import { authMiddleware, requireUserId } from '@/middleware/auth';
-import { standardRateLimit } from '@/middleware/rateLimit';
-import { 
-  createTransactionSchema,
-  updateTransactionSchema,
-  categorizeTransactionSchema,
-  paginationSchema,
-  dateRangeSchema
-} from '@/validators';
+import { zValidator } from '@hono/zod-validator';
+import { auth } from '../middleware/auth';
+import { db, transactions, categories, budgets, plaidAccounts } from '../db';
+import { eq, and, gte, lte, sql, desc, asc, or, ilike } from 'drizzle-orm';
+import { HTTPException } from 'hono/http-exception';
+import { Cache } from '../lib/redis';
 
-const transactions = new Hono();
+const transactionsRouter = new Hono();
 
-// Apply middleware
-transactions.use('*', authMiddleware, standardRateLimit);
+// Apply auth middleware to all routes
+transactionsRouter.use('*', auth);
 
-// GET /transactions - List transactions with filtering
-transactions.get('/',
-  requireUserId,
-  zValidator('query', paginationSchema.merge(dateRangeSchema).extend({
-    accountId: z.string().optional(),
-    categoryId: z.string().optional(),
-    search: z.string().optional(),
-    pending: z.coerce.boolean().optional(),
-  })),
+// Validation schemas
+const createTransactionSchema = z.object({
+  budgetId: z.string().uuid().optional(),
+  categoryId: z.string().uuid().optional(),
+  amount: z.number().positive(),
+  type: z.enum(['income', 'expense']),
+  description: z.string().min(1).max(200),
+  merchantName: z.string().optional(),
+  date: z.string().datetime(),
+  pending: z.boolean().default(false),
+  notes: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+});
+
+const updateTransactionSchema = createTransactionSchema.partial();
+
+const transactionQuerySchema = z.object({
+  budgetId: z.string().uuid().optional(),
+  categoryId: z.string().uuid().optional(),
+  type: z.enum(['income', 'expense']).optional(),
+  startDate: z.string().datetime().optional(),
+  endDate: z.string().datetime().optional(),
+  search: z.string().optional(),
+  pending: z.enum(['true', 'false']).optional(),
+  limit: z.string().transform(Number).default('50'),
+  offset: z.string().transform(Number).default('0'),
+  sort: z.enum(['date', 'amount', 'description']).default('date'),
+  order: z.enum(['asc', 'desc']).default('desc'),
+});
+
+// List transactions
+transactionsRouter.get('/',
+  zValidator('query', transactionQuerySchema),
   async (c) => {
-    const userId = c.get('userId')!;
-    const { 
-      page, 
-      limit, 
-      sort = 'date', 
-      order,
-      startDate,
-      endDate,
-      accountId,
-      categoryId,
-      search,
-      pending
-    } = c.req.valid('query');
+    const user = c.get('user');
+    const query = c.req.valid('query');
     
-    // Build cache key
-    const cacheKey = `transactions:${userId}:${page}:${limit}:${sort}:${order}:${startDate}:${endDate}:${accountId}:${categoryId}:${search}:${pending}`;
-    const cached = await cache.get(cacheKey);
-    if (cached) return c.json(cached);
-    
-    // Build where clause
-    const where: any = {
-      userId,
-      ...(startDate && { date: { gte: new Date(startDate) } }),
-      ...(endDate && { date: { ...where?.date, lte: new Date(endDate) } }),
-      ...(accountId && { plaidAccountId: accountId }),
-      ...(pending !== undefined && { pending }),
-      ...(search && {
-        OR: [
-          { description: { contains: search, mode: 'insensitive' } },
-          { merchantName: { contains: search, mode: 'insensitive' } },
-        ],
-      }),
-    };
-    
-    // Handle category filtering
-    if (categoryId) {
-      where.categoryMappings = {
-        some: { budgetCategoryId: categoryId },
-      };
+    // Check cache for simple queries
+    const cacheKey = `transactions:${user.id}:${JSON.stringify(query)}`;
+    if (!query.search && query.limit <= 50) {
+      const cached = await Cache.get<any>(cacheKey);
+      if (cached) {
+        c.header('X-Cache', 'HIT');
+        return c.json(cached);
+      }
     }
     
-    const [transactions, total] = await Promise.all([
-      prisma.transaction.findMany({
-        where,
-        include: {
-          plaidAccount: {
-            select: {
-              id: true,
-              name: true,
-              mask: true,
-              type: true,
-            },
-          },
-          categoryMappings: {
-            include: {
-              budgetCategory: {
-                select: {
-                  id: true,
-                  name: true,
-                  color: true,
-                  icon: true,
-                },
-              },
-            },
-          },
-        },
-        orderBy: { [sort]: order },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      prisma.transaction.count({ where }),
-    ]);
+    // Build query conditions
+    let conditions: any[] = [eq(transactions.userId, user.id)];
     
-    const response = {
-      data: transactions.map(t => ({
-        ...t,
-        amount: Number(t.amount),
-        categories: t.categoryMappings.map(m => m.budgetCategory),
-        categoryMappings: undefined,
-      })),
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
-    
-    // Cache for 30 seconds
-    await cache.set(cacheKey, response, 30);
-    
-    return c.json(response);
-  }
-);
-
-// GET /transactions/summary - Get transaction summary
-transactions.get('/summary',
-  requireUserId,
-  zValidator('query', dateRangeSchema),
-  async (c) => {
-    const userId = c.get('userId')!;
-    const { startDate, endDate } = c.req.valid('query');
-    
-    // Build date filter
-    const dateFilter = {
-      ...(startDate && { gte: new Date(startDate) }),
-      ...(endDate && { lte: new Date(endDate) }),
-    };
-    
-    // Get summary data
-    const [totalSpent, transactionCount, categoryBreakdown] = await Promise.all([
-      prisma.transaction.aggregate({
-        where: {
-          userId,
-          date: dateFilter,
-          pending: false,
-        },
-        _sum: { amount: true },
-      }),
-      prisma.transaction.count({
-        where: {
-          userId,
-          date: dateFilter,
-        },
-      }),
-      prisma.$queryRaw<Array<{ categoryId: string; categoryName: string; total: number }>>`
-        SELECT 
-          bc.id as "categoryId",
-          bc.name as "categoryName",
-          SUM(t.amount) as total
-        FROM "Transaction" t
-        INNER JOIN "TransactionCategoryMapping" tcm ON t.id = tcm."transactionId"
-        INNER JOIN "BudgetCategory" bc ON tcm."budgetCategoryId" = bc.id
-        WHERE t."userId" = ${userId}
-          ${startDate ? Prisma.sql`AND t.date >= ${new Date(startDate)}` : Prisma.empty}
-          ${endDate ? Prisma.sql`AND t.date <= ${new Date(endDate)}` : Prisma.empty}
-          AND t.pending = false
-        GROUP BY bc.id, bc.name
-        ORDER BY total DESC
-      `,
-    ]);
-    
-    return c.json({
-      totalSpent: Number(totalSpent._sum.amount || 0),
-      transactionCount,
-      categoryBreakdown: categoryBreakdown.map(c => ({
-        categoryId: c.categoryId,
-        categoryName: c.categoryName,
-        total: Number(c.total),
-      })),
-    });
-  }
-);
-
-// GET /transactions/:id - Get specific transaction
-transactions.get('/:id',
-  requireUserId,
-  async (c) => {
-    const userId = c.get('userId')!;
-    const transactionId = c.req.param('id');
-    
-    const transaction = await prisma.transaction.findFirst({
-      where: {
-        id: transactionId,
-        userId,
-      },
-      include: {
-        plaidAccount: true,
-        categoryMappings: {
-          include: {
-            budgetCategory: true,
-          },
-        },
-      },
-    });
-    
-    if (!transaction) {
-      return c.json({ error: 'Transaction not found' }, 404);
+    if (query.budgetId) {
+      conditions.push(eq(transactions.budgetId, query.budgetId));
     }
     
-    return c.json({
-      ...transaction,
-      amount: Number(transaction.amount),
-      categories: transaction.categoryMappings.map(m => m.budgetCategory),
-      categoryMappings: undefined,
-    });
+    if (query.categoryId) {
+      conditions.push(eq(transactions.categoryId, query.categoryId));
+    }
+    
+    if (query.type) {
+      conditions.push(eq(transactions.type, query.type));
+    }
+    
+    if (query.startDate) {
+      conditions.push(gte(transactions.date, new Date(query.startDate)));
+    }
+    
+    if (query.endDate) {
+      conditions.push(lte(transactions.date, new Date(query.endDate)));
+    }
+    
+    if (query.pending !== undefined) {
+      conditions.push(eq(transactions.pending, query.pending === 'true'));
+    }
+    
+    if (query.search) {
+      conditions.push(
+        or(
+          ilike(transactions.description, `%${query.search}%`),
+          ilike(transactions.merchantName, `%${query.search}%`),
+          ilike(transactions.notes, `%${query.search}%`)
+        )
+      );
+    }
+    
+    // Determine sort order
+    let orderBy;
+    switch (query.sort) {
+      case 'amount':
+        orderBy = query.order === 'asc' ? asc(transactions.amount) : desc(transactions.amount);
+        break;
+      case 'description':
+        orderBy = query.order === 'asc' ? asc(transactions.description) : desc(transactions.description);
+        break;
+      default:
+        orderBy = query.order === 'asc' ? asc(transactions.date) : desc(transactions.date);
+    }
+    
+    // Execute query with joins
+    const transactionList = await db
+      .select({
+        transaction: transactions,
+        category: categories,
+        budget: budgets,
+        account: plaidAccounts,
+      })
+      .from(transactions)
+      .leftJoin(categories, eq(transactions.categoryId, categories.id))
+      .leftJoin(budgets, eq(transactions.budgetId, budgets.id))
+      .leftJoin(plaidAccounts, eq(transactions.plaidAccountId, plaidAccounts.id))
+      .where(and(...conditions))
+      .orderBy(orderBy)
+      .limit(query.limit)
+      .offset(query.offset);
+    
+    // Get total count
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(transactions)
+      .where(and(...conditions));
+    
+    const result = {
+      transactions: transactionList.map(t => ({
+        ...t.transaction,
+        category: t.category ? {
+          id: t.category.id,
+          name: t.category.name,
+          color: t.category.color,
+          icon: t.category.icon,
+        } : null,
+        budget: t.budget ? {
+          id: t.budget.id,
+          name: t.budget.name,
+        } : null,
+        account: t.account ? {
+          id: t.account.id,
+          name: t.account.name,
+          mask: t.account.mask,
+        } : null,
+      })),
+      total: count,
+      limit: query.limit,
+      offset: query.offset,
+    };
+    
+    // Cache for 30 seconds if not searching
+    if (!query.search && query.limit <= 50) {
+      await Cache.set(cacheKey, result, 30);
+    }
+    
+    c.header('X-Cache', query.search ? 'BYPASS' : 'MISS');
+    return c.json(result);
   }
 );
 
-// POST /transactions - Create manual transaction
-transactions.post('/',
-  requireUserId,
+// Get single transaction
+transactionsRouter.get('/:id', async (c) => {
+  const user = c.get('user');
+  const transactionId = c.req.param('id');
+  
+  const [transaction] = await db
+    .select({
+      transaction: transactions,
+      category: categories,
+      budget: budgets,
+      account: plaidAccounts,
+    })
+    .from(transactions)
+    .leftJoin(categories, eq(transactions.categoryId, categories.id))
+    .leftJoin(budgets, eq(transactions.budgetId, budgets.id))
+    .leftJoin(plaidAccounts, eq(transactions.plaidAccountId, plaidAccounts.id))
+    .where(
+      and(
+        eq(transactions.id, transactionId),
+        eq(transactions.userId, user.id)
+      )
+    )
+    .limit(1);
+  
+  if (!transaction) {
+    throw new HTTPException(404, { message: 'Transaction not found' });
+  }
+  
+  return c.json({
+    ...transaction.transaction,
+    category: transaction.category,
+    budget: transaction.budget,
+    account: transaction.account,
+  });
+});
+
+// Create transaction
+transactionsRouter.post('/',
   zValidator('json', createTransactionSchema),
   async (c) => {
-    const userId = c.get('userId')!;
+    const user = c.get('user');
     const data = c.req.valid('json');
     
-    const transaction = await prisma.transaction.create({
-      data: {
-        userId,
-        amount: data.amount,
+    // Validate category ownership if provided
+    if (data.categoryId) {
+      const [category] = await db
+        .select()
+        .from(categories)
+        .where(
+          and(
+            eq(categories.id, data.categoryId),
+            eq(categories.userId, user.id)
+          )
+        )
+        .limit(1);
+      
+      if (!category) {
+        throw new HTTPException(400, { message: 'Invalid category' });
+      }
+    }
+    
+    // Validate budget ownership if provided
+    if (data.budgetId) {
+      const [budget] = await db
+        .select()
+        .from(budgets)
+        .where(
+          and(
+            eq(budgets.id, data.budgetId),
+            eq(budgets.userId, user.id)
+          )
+        )
+        .limit(1);
+      
+      if (!budget) {
+        throw new HTTPException(400, { message: 'Invalid budget' });
+      }
+    }
+    
+    // Create transaction
+    const [transaction] = await db
+      .insert(transactions)
+      .values({
+        userId: user.id,
+        budgetId: data.budgetId,
+        categoryId: data.categoryId,
+        amount: data.amount.toString(),
+        type: data.type,
         description: data.description,
         merchantName: data.merchantName,
         date: new Date(data.date),
-        category: data.category,
-        isManual: true,
-        // Create category mapping if provided
-        ...(data.budgetCategoryId && {
-          categoryMappings: {
-            create: {
-              budgetCategoryId: data.budgetCategoryId,
-            },
-          },
-        }),
-      },
-      include: {
-        categoryMappings: {
-          include: {
-            budgetCategory: true,
-          },
-        },
-      },
-    });
+        pending: data.pending,
+        notes: data.notes,
+        tags: data.tags,
+      })
+      .returning();
     
-    // Invalidate cache
-    await cache.invalidatePattern(`transactions:${userId}:*`);
+    // Clear cache
+    await Cache.deletePattern(`transactions:${user.id}:*`);
+    if (data.budgetId) {
+      await Cache.delete(`budget:${data.budgetId}`);
+    }
     
-    return c.json({
-      ...transaction,
-      amount: Number(transaction.amount),
-      categories: transaction.categoryMappings.map(m => m.budgetCategory),
-      categoryMappings: undefined,
-    }, 201);
+    return c.json(transaction, 201);
   }
 );
 
-// PUT /transactions/:id - Update transaction
-transactions.put('/:id',
-  requireUserId,
+// Update transaction
+transactionsRouter.patch('/:id',
   zValidator('json', updateTransactionSchema),
   async (c) => {
-    const userId = c.get('userId')!;
+    const user = c.get('user');
     const transactionId = c.req.param('id');
     const data = c.req.valid('json');
     
-    // Verify ownership
-    const existing = await prisma.transaction.findFirst({
-      where: {
-        id: transactionId,
-        userId,
-      },
-    });
+    // Check ownership
+    const [existing] = await db
+      .select()
+      .from(transactions)
+      .where(
+        and(
+          eq(transactions.id, transactionId),
+          eq(transactions.userId, user.id)
+        )
+      )
+      .limit(1);
     
     if (!existing) {
-      return c.json({ error: 'Transaction not found' }, 404);
+      throw new HTTPException(404, { message: 'Transaction not found' });
     }
     
-    // Only allow updating manual transactions
-    if (!existing.isManual) {
-      return c.json({ error: 'Cannot update synced transactions' }, 403);
+    // Don't allow editing Plaid transactions
+    if (existing.plaidTransactionId) {
+      throw new HTTPException(400, { message: 'Cannot edit synced transactions' });
     }
     
-    const transaction = await prisma.transaction.update({
-      where: { id: transactionId },
-      data: {
-        amount: data.amount,
-        description: data.description,
-        merchantName: data.merchantName,
-        date: data.date ? new Date(data.date) : undefined,
-        category: data.category,
-      },
-      include: {
-        categoryMappings: {
-          include: {
-            budgetCategory: true,
-          },
-        },
-      },
-    });
+    // Validate new category if provided
+    if (data.categoryId) {
+      const [category] = await db
+        .select()
+        .from(categories)
+        .where(
+          and(
+            eq(categories.id, data.categoryId),
+            eq(categories.userId, user.id)
+          )
+        )
+        .limit(1);
+      
+      if (!category) {
+        throw new HTTPException(400, { message: 'Invalid category' });
+      }
+    }
     
-    // Invalidate cache
-    await cache.invalidatePattern(`transactions:${userId}:*`);
+    // Update transaction
+    const updates: any = {
+      updatedAt: new Date(),
+    };
     
-    return c.json({
-      ...transaction,
-      amount: Number(transaction.amount),
-      categories: transaction.categoryMappings.map(m => m.budgetCategory),
-      categoryMappings: undefined,
-    });
+    if (data.amount !== undefined) updates.amount = data.amount.toString();
+    if (data.type !== undefined) updates.type = data.type;
+    if (data.description !== undefined) updates.description = data.description;
+    if (data.merchantName !== undefined) updates.merchantName = data.merchantName;
+    if (data.date !== undefined) updates.date = new Date(data.date);
+    if (data.pending !== undefined) updates.pending = data.pending;
+    if (data.notes !== undefined) updates.notes = data.notes;
+    if (data.tags !== undefined) updates.tags = data.tags;
+    if (data.categoryId !== undefined) updates.categoryId = data.categoryId;
+    if (data.budgetId !== undefined) updates.budgetId = data.budgetId;
+    
+    const [updated] = await db
+      .update(transactions)
+      .set(updates)
+      .where(eq(transactions.id, transactionId))
+      .returning();
+    
+    // Clear cache
+    await Cache.deletePattern(`transactions:${user.id}:*`);
+    if (existing.budgetId) {
+      await Cache.delete(`budget:${existing.budgetId}`);
+    }
+    if (data.budgetId && data.budgetId !== existing.budgetId) {
+      await Cache.delete(`budget:${data.budgetId}`);
+    }
+    
+    return c.json(updated);
   }
 );
 
-// DELETE /transactions/:id - Delete transaction
-transactions.delete('/:id',
-  requireUserId,
-  async (c) => {
-    const userId = c.get('userId')!;
-    const transactionId = c.req.param('id');
-    
-    // Verify ownership and that it's manual
-    const existing = await prisma.transaction.findFirst({
-      where: {
-        id: transactionId,
-        userId,
-      },
-    });
-    
-    if (!existing) {
-      return c.json({ error: 'Transaction not found' }, 404);
-    }
-    
-    if (!existing.isManual) {
-      return c.json({ error: 'Cannot delete synced transactions' }, 403);
-    }
-    
-    await prisma.transaction.delete({
-      where: { id: transactionId },
-    });
-    
-    // Invalidate cache
-    await cache.invalidatePattern(`transactions:${userId}:*`);
-    
-    return c.json({ success: true });
+// Delete transaction
+transactionsRouter.delete('/:id', async (c) => {
+  const user = c.get('user');
+  const transactionId = c.req.param('id');
+  
+  // Check ownership
+  const [existing] = await db
+    .select()
+    .from(transactions)
+    .where(
+      and(
+        eq(transactions.id, transactionId),
+        eq(transactions.userId, user.id)
+      )
+    )
+    .limit(1);
+  
+  if (!existing) {
+    throw new HTTPException(404, { message: 'Transaction not found' });
   }
-);
-
-// POST /transactions/:id/categorize - Categorize transaction
-transactions.post('/:id/categorize',
-  requireUserId,
-  zValidator('json', z.object({ budgetCategoryId: z.string().cuid() })),
-  async (c) => {
-    const userId = c.get('userId')!;
-    const transactionId = c.req.param('id');
-    const { budgetCategoryId } = c.req.valid('json');
-    
-    // Verify transaction ownership
-    const transaction = await prisma.transaction.findFirst({
-      where: {
-        id: transactionId,
-        userId,
-      },
-    });
-    
-    if (!transaction) {
-      return c.json({ error: 'Transaction not found' }, 404);
-    }
-    
-    // Verify category exists
-    const category = await prisma.budgetCategory.findUnique({
-      where: { id: budgetCategoryId },
-      include: { budget: true },
-    });
-    
-    if (!category || category.budget.userId !== userId) {
-      return c.json({ error: 'Category not found' }, 404);
-    }
-    
-    // Create or update category mapping
-    await prisma.transactionCategoryMapping.upsert({
-      where: {
-        transactionId_budgetCategoryId: {
-          transactionId,
-          budgetCategoryId,
-        },
-      },
-      create: {
-        transactionId,
-        budgetCategoryId,
-      },
-      update: {},
-    });
-    
-    // Update category spent amount
-    await prisma.budgetCategory.update({
-      where: { id: budgetCategoryId },
-      data: {
-        spent: {
-          increment: transaction.amount,
-        },
-      },
-    });
-    
-    // Invalidate cache
-    await cache.invalidatePattern(`transactions:${userId}:*`);
-    await cache.invalidatePattern(`budgets:${userId}:*`);
-    
-    return c.json({ success: true });
+  
+  // Don't allow deleting Plaid transactions
+  if (existing.plaidTransactionId) {
+    throw new HTTPException(400, { message: 'Cannot delete synced transactions' });
   }
-);
-
-// DELETE /transactions/:id/categorize/:categoryId - Remove category from transaction
-transactions.delete('/:id/categorize/:categoryId',
-  requireUserId,
-  async (c) => {
-    const userId = c.get('userId')!;
-    const transactionId = c.req.param('id');
-    const categoryId = c.req.param('categoryId');
-    
-    // Verify transaction ownership
-    const transaction = await prisma.transaction.findFirst({
-      where: {
-        id: transactionId,
-        userId,
-      },
-    });
-    
-    if (!transaction) {
-      return c.json({ error: 'Transaction not found' }, 404);
-    }
-    
-    // Delete category mapping
-    await prisma.transactionCategoryMapping.delete({
-      where: {
-        transactionId_budgetCategoryId: {
-          transactionId,
-          budgetCategoryId: categoryId,
-        },
-      },
-    }).catch(() => {}); // Ignore if not found
-    
-    // Update category spent amount
-    await prisma.budgetCategory.update({
-      where: { id: categoryId },
-      data: {
-        spent: {
-          decrement: transaction.amount,
-        },
-      },
-    }).catch(() => {}); // Ignore if not found
-    
-    // Invalidate cache
-    await cache.invalidatePattern(`transactions:${userId}:*`);
-    await cache.invalidatePattern(`budgets:${userId}:*`);
-    
-    return c.json({ success: true });
+  
+  // Delete transaction
+  await db
+    .delete(transactions)
+    .where(eq(transactions.id, transactionId));
+  
+  // Clear cache
+  await Cache.deletePattern(`transactions:${user.id}:*`);
+  if (existing.budgetId) {
+    await Cache.delete(`budget:${existing.budgetId}`);
   }
-);
+  
+  return c.json({ message: 'Transaction deleted successfully' });
+});
 
-// POST /transactions/bulk-categorize - Bulk categorize transactions
-transactions.post('/bulk-categorize',
-  requireUserId,
+// Bulk categorize transactions
+transactionsRouter.post('/bulk-categorize',
   zValidator('json', z.object({
-    mappings: z.array(z.object({
-      transactionId: z.string().cuid(),
-      budgetCategoryId: z.string().cuid(),
-    })),
+    transactionIds: z.array(z.string().uuid()),
+    categoryId: z.string().uuid(),
   })),
   async (c) => {
-    const userId = c.get('userId')!;
-    const { mappings } = c.req.valid('json');
+    const user = c.get('user');
+    const { transactionIds, categoryId } = c.req.valid('json');
     
-    // Verify all transactions belong to user
-    const transactionIds = mappings.map(m => m.transactionId);
-    const transactions = await prisma.transaction.findMany({
-      where: {
-        id: { in: transactionIds },
-        userId,
-      },
-    });
+    // Validate category ownership
+    const [category] = await db
+      .select()
+      .from(categories)
+      .where(
+        and(
+          eq(categories.id, categoryId),
+          eq(categories.userId, user.id)
+        )
+      )
+      .limit(1);
     
-    if (transactions.length !== transactionIds.length) {
-      return c.json({ error: 'Some transactions not found' }, 404);
+    if (!category) {
+      throw new HTTPException(400, { message: 'Invalid category' });
     }
     
-    // Verify all categories exist
-    const categoryIds = [...new Set(mappings.map(m => m.budgetCategoryId))];
-    const categories = await prisma.budgetCategory.findMany({
-      where: {
-        id: { in: categoryIds },
-        budget: { userId },
-      },
+    // Update transactions
+    const result = await db
+      .update(transactions)
+      .set({
+        categoryId,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(transactions.userId, user.id),
+          sql`${transactions.id} = any(${transactionIds})`
+        )
+      );
+    
+    // Clear cache
+    await Cache.deletePattern(`transactions:${user.id}:*`);
+    
+    return c.json({ 
+      message: 'Transactions categorized successfully',
+      updated: result.rowCount,
     });
-    
-    if (categories.length !== categoryIds.length) {
-      return c.json({ error: 'Some categories not found' }, 404);
-    }
-    
-    // Create mappings in batch
-    await prisma.transactionCategoryMapping.createMany({
-      data: mappings,
-      skipDuplicates: true,
-    });
-    
-    // Update category spent amounts
-    const categoryUpdates = categories.map(category => {
-      const categoryTransactions = mappings
-        .filter(m => m.budgetCategoryId === category.id)
-        .map(m => transactions.find(t => t.id === m.transactionId)!)
-        .reduce((sum, t) => sum + Number(t.amount), 0);
-      
-      return prisma.budgetCategory.update({
-        where: { id: category.id },
-        data: {
-          spent: {
-            increment: categoryTransactions,
-          },
-        },
-      });
-    });
-    
-    await Promise.all(categoryUpdates);
-    
-    // Invalidate cache
-    await cache.invalidatePattern(`transactions:${userId}:*`);
-    await cache.invalidatePattern(`budgets:${userId}:*`);
-    
-    return c.json({ success: true, mapped: mappings.length });
   }
 );
 
-export default transactions;
+export { transactionsRouter };

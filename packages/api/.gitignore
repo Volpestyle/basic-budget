@@ -1,56 +1,34 @@
-# Dependencies
+# dependencies (bun install)
 node_modules
-.pnp
-.pnp.js
 
-# Testing
+# output
+out
+dist
+*.tgz
+
+# code coverage
 coverage
 *.lcov
-.nyc_output
 
-# Production
-dist
-build
+# logs
+logs
+_.log
+report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
-# Misc
-.DS_Store
-*.pem
-
-# Debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-bun-debug.log*
-
-# Local env files
+# dotenv environment variable files
 .env
-.env.local
 .env.development.local
 .env.test.local
 .env.production.local
+.env.local
 
-# IDE
-.vscode
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IntelliJ based IDEs
 .idea
-*.swp
-*.swo
 
-# Database
-*.db
-*.db-journal
-*.sqlite
-*.sqlite3
-prisma/migrations/dev
-
-# Uploads (local storage)
-uploads/
-
-# Logs
-logs
-*.log
-
-# OS
-Thumbs.db
-
-# Bun
-bun.lockb
+# Finder (MacOS) folder config
+.DS_Store

@@ -1,194 +1,362 @@
 import * as cdk from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
+import * as certificatemanager from 'aws-cdk-lib/aws-certificatemanager';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
-import { EnvironmentConfig } from '../../config/environments';
+import { EnvironmentConfig } from '../config/environment';
 
 export interface FrontendStackProps extends cdk.StackProps {
   config: EnvironmentConfig;
+  certificateArn?: string;
 }
 
 export class FrontendStack extends cdk.Stack {
   public readonly bucket: s3.Bucket;
   public readonly distribution: cloudfront.Distribution;
-  public readonly bucketDeployment?: s3deploy.BucketDeployment;
+  public readonly oai: cloudfront.OriginAccessIdentity;
 
   constructor(scope: Construct, id: string, props: FrontendStackProps) {
     super(scope, id, props);
 
-    const { config } = props;
-
-    // S3 Bucket for hosting the React app
-    this.bucket = new s3.Bucket(this, 'WebsiteBucket', {
-      bucketName: `basic-budget-frontend-${config.environment}-${cdk.Aws.ACCOUNT_ID}`,
+    // S3 Bucket for hosting React application
+    this.bucket = new s3.Bucket(this, 'FrontendBucket', {
+      bucketName: `basic-budget-${props.config.environment}-frontend`,
       websiteIndexDocument: 'index.html',
-      websiteErrorDocument: 'error.html',
-      publicReadAccess: false, // We'll use OAC instead
+      websiteErrorDocument: 'index.html', // SPA routing
+      publicReadAccess: false,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
-      removalPolicy: config.environment === 'prod' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: config.environment !== 'prod',
-      versioned: config.environment === 'prod',
-      lifecycleRules: config.environment === 'prod' ? [
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      versioned: props.config.environment === 'prod',
+      lifecycleRules: [
         {
           id: 'DeleteOldVersions',
-          noncurrentVersionExpiration: cdk.Duration.days(30),
-          noncurrentVersionsToRetain: 5,
-        },
-      ] : undefined,
+          enabled: props.config.environment === 'prod',
+          noncurrentVersionExpiration: cdk.Duration.days(30)
+        }
+      ],
+      removalPolicy: props.config.environment === 'prod' 
+        ? cdk.RemovalPolicy.RETAIN 
+        : cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: props.config.environment !== 'prod'
     });
 
-    // Origin Access Control for secure S3 access
-    const oac = new cloudfront.S3OriginAccessControl(this, 'OAC', {
-      description: `OAC for ${config.environment} basic-budget frontend`,
+    // Origin Access Identity for secure CloudFront access
+    this.oai = new cloudfront.OriginAccessIdentity(this, 'OriginAccessIdentity', {
+      comment: `OAI for Basic Budget ${props.config.environment} frontend`
     });
+
+    // Bucket policy to allow CloudFront access
+    this.bucket.addToResourcePolicy(new iam.PolicyStatement({
+      actions: ['s3:GetObject'],
+      resources: [this.bucket.arnForObjects('*')],
+      principals: [this.oai.grantPrincipal]
+    }));
+
+    // Security headers function for CloudFront
+    const securityHeadersFunction = new cloudfront.Function(this, 'SecurityHeadersFunction', {
+      functionName: `basic-budget-${props.config.environment}-security-headers`,
+      code: cloudfront.FunctionCode.fromInline(`
+        function handler(event) {
+          var response = event.response;
+          var headers = response.headers;
+          
+          // Security headers
+          headers['strict-transport-security'] = { value: 'max-age=31536000; includeSubDomains' };
+          headers['x-content-type-options'] = { value: 'nosniff' };
+          headers['x-frame-options'] = { value: 'DENY' };
+          headers['x-xss-protection'] = { value: '1; mode=block' };
+          headers['referrer-policy'] = { value: 'strict-origin-when-cross-origin' };
+          headers['content-security-policy'] = { 
+            value: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://*.${props.config.domainName || 'localhost'};" 
+          };
+          
+          return response;
+        }
+      `)
+    });
+
+    // Cache behaviors for different content types
+    const cacheBehaviors: Record<string, cloudfront.BehaviorOptions> = {
+      '/static/*': {
+        origin: new origins.S3Origin(this.bucket, {
+          originAccessIdentity: this.oai
+        }),
+        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        compress: true
+      },
+      '/assets/*': {
+        origin: new origins.S3Origin(this.bucket, {
+          originAccessIdentity: this.oai
+        }),
+        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        compress: true
+      },
+      '*.js': {
+        origin: new origins.S3Origin(this.bucket, {
+          originAccessIdentity: this.oai
+        }),
+        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        compress: true
+      },
+      '*.css': {
+        origin: new origins.S3Origin(this.bucket, {
+          originAccessIdentity: this.oai
+        }),
+        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        compress: true
+      }
+    };
 
     // CloudFront Distribution
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
+      comment: `Basic Budget ${props.config.environment} distribution`,
       defaultBehavior: {
-        origin: origins.S3BucketOrigin.withOriginAccessControl(this.bucket, {
-          originAccessControl: oac,
+        origin: new origins.S3Origin(this.bucket, {
+          originAccessIdentity: this.oai
+        }),
+        cachePolicy: new cloudfront.CachePolicy(this, 'SPACachePolicy', {
+          cachePolicyName: `basic-budget-${props.config.environment}-spa`,
+          comment: 'Cache policy for SPA',
+          defaultTtl: cdk.Duration.hours(24),
+          maxTtl: cdk.Duration.days(365),
+          minTtl: cdk.Duration.seconds(0),
+          headerBehavior: cloudfront.CacheHeaderBehavior.none(),
+          queryStringBehavior: cloudfront.CacheQueryStringBehavior.none(),
+          cookieBehavior: cloudfront.CacheCookieBehavior.none()
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
-        originRequestPolicy: cloudfront.OriginRequestPolicy.CORS_S3_ORIGIN,
-        responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+        cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
         compress: true,
-        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
-        cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD,
+        functionAssociations: [
+          {
+            function: securityHeadersFunction,
+            eventType: cloudfront.FunctionEventType.VIEWER_RESPONSE
+          }
+        ]
       },
-      additionalBehaviors: {
-        '/api/*': {
-          origin: new origins.HttpOrigin('placeholder-api-domain.com'), // Will be updated after API stack
-          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
-          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-        },
-      },
+      additionalBehaviors: cacheBehaviors,
       errorResponses: [
         {
           httpStatus: 404,
           responseHttpStatus: 200,
           responsePagePath: '/index.html',
-          ttl: cdk.Duration.minutes(1),
+          ttl: cdk.Duration.minutes(5)
         },
         {
           httpStatus: 403,
           responseHttpStatus: 200,
           responsePagePath: '/index.html',
-          ttl: cdk.Duration.minutes(1),
-        },
+          ttl: cdk.Duration.minutes(5)
+        }
       ],
-      priceClass: config.environment === 'prod' 
-        ? cloudfront.PriceClass.PRICE_CLASS_ALL 
-        : cloudfront.PriceClass.PRICE_CLASS_100,
+      priceClass: props.config.cloudFront.priceClass as cloudfront.PriceClass,
       enabled: true,
-      comment: `Basic Budget ${config.environment} Frontend Distribution`,
-      defaultRootObject: 'index.html',
+      httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
-      domainNames: config.domainName ? [`${config.environment === 'prod' ? '' : config.environment + '.'}${config.domainName}`] : undefined,
-      certificate: config.certificateArn ? cdk.aws_certificatemanager.Certificate.fromCertificateArn(
-        this,
-        'Certificate',
-        config.certificateArn
-      ) : undefined,
+      enableLogging: props.config.cloudFront.enableLogging,
+      logBucket: props.config.cloudFront.enableLogging 
+        ? new s3.Bucket(this, 'LogsBucket', {
+            bucketName: `basic-budget-${props.config.environment}-logs`,
+            encryption: s3.BucketEncryption.S3_MANAGED,
+            enforceSSL: true,
+            publicReadAccess: false,
+            blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+            lifecycleRules: [
+              {
+                id: 'DeleteLogs',
+                enabled: true,
+                expiration: cdk.Duration.days(90)
+              }
+            ],
+            removalPolicy: props.config.environment === 'prod' 
+              ? cdk.RemovalPolicy.RETAIN 
+              : cdk.RemovalPolicy.DESTROY,
+            autoDeleteObjects: props.config.environment !== 'prod'
+          })
+        : undefined,
+      logFilePrefix: 'cloudfront-logs/',
+      domainNames: props.config.domainName ? [props.config.domainName] : undefined,
+      certificate: props.certificateArn 
+        ? certificatemanager.Certificate.fromCertificateArn(this, 'Certificate', props.certificateArn)
+        : undefined,
+      sslSupportMethod: props.certificateArn 
+        ? cloudfront.SSLMethod.SNI 
+        : undefined
     });
 
-    // Grant CloudFront access to S3 bucket
-    this.bucket.addToResourcePolicy(new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
-      actions: ['s3:GetObject'],
-      resources: [`${this.bucket.bucketArn}/*`],
-      conditions: {
-        StringEquals: {
-          'AWS:SourceArn': `arn:aws:cloudfront::${cdk.Aws.ACCOUNT_ID}:distribution/${this.distribution.distributionId}`,
-        },
-      },
-    }));
+    // Route 53 DNS records if domain is configured
+    if (props.config.domainName) {
+      const hostedZone = route53.HostedZone.fromLookup(this, 'HostedZone', {
+        domainName: props.config.domainName.split('.').slice(-2).join('.')
+      });
 
-    // IAM role for GitHub Actions deployment
-    const deploymentRole = new iam.Role(this, 'FrontendDeploymentRole', {
-      roleName: `basic-budget-frontend-deploy-${config.environment}`,
-      assumedBy: new iam.WebIdentityPrincipal(
-        `arn:aws:iam::${cdk.Aws.ACCOUNT_ID}:oidc-provider/token.actions.githubusercontent.com`,
+      new route53.ARecord(this, 'ARecord', {
+        zone: hostedZone,
+        recordName: props.config.domainName,
+        target: route53.RecordTarget.fromAlias(
+          new route53Targets.CloudFrontTarget(this.distribution)
+        )
+      });
+
+      new route53.AaaaRecord(this, 'AAAARecord', {
+        zone: hostedZone,
+        recordName: props.config.domainName,
+        target: route53.RecordTarget.fromAlias(
+          new route53Targets.CloudFrontTarget(this.distribution)
+        )
+      });
+    }
+
+    // Build and deploy script for CI/CD
+    const buildBucket = new s3.Bucket(this, 'BuildArtifactsBucket', {
+      bucketName: `basic-budget-${props.config.environment}-build-artifacts`,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      publicReadAccess: false,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      lifecycleRules: [
         {
-          StringEquals: {
-            'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-          },
-          StringLike: {
-            'token.actions.githubusercontent.com:sub': 'repo:*/basic-budget:*', // Update with your GitHub repo
-          },
+          id: 'DeleteBuildArtifacts',
+          enabled: true,
+          expiration: cdk.Duration.days(30)
         }
-      ),
-      inlinePolicies: {
-        S3DeploymentPolicy: new iam.PolicyDocument({
-          statements: [
-            new iam.PolicyStatement({
-              effect: iam.Effect.ALLOW,
-              actions: [
-                's3:GetObject',
-                's3:PutObject',
-                's3:DeleteObject',
-                's3:ListBucket',
-              ],
-              resources: [
-                this.bucket.bucketArn,
-                `${this.bucket.bucketArn}/*`,
-              ],
-            }),
-            new iam.PolicyStatement({
-              effect: iam.Effect.ALLOW,
-              actions: [
-                'cloudfront:CreateInvalidation',
-                'cloudfront:GetInvalidation',
-                'cloudfront:ListInvalidations',
-              ],
-              resources: [`arn:aws:cloudfront::${cdk.Aws.ACCOUNT_ID}:distribution/${this.distribution.distributionId}`],
-            }),
-          ],
+      ],
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true
+    });
+
+    // CloudWatch Real User Monitoring if in production
+    if (props.config.environment === 'prod') {
+      const rumApp = new cdk.aws_rum.CfnAppMonitor(this, 'RUMMonitor', {
+        name: `basic-budget-${props.config.environment}`,
+        domain: props.config.domainName || this.distribution.distributionDomainName,
+        appMonitorConfiguration: {
+          allowCookies: false,
+          enableXRay: props.config.monitoring.enableXRay,
+          sessionSampleRate: 0.1, // 10% sampling for cost optimization
+          telemetries: ['errors', 'performance', 'http']
+        }
+      });
+    }
+
+    // CloudWatch Alarms for monitoring
+    if (props.config.monitoring.enableDetailedMonitoring) {
+      // CloudFront 4XX errors
+      new cdk.aws_cloudwatch.Alarm(this, 'CloudFront4XXErrorAlarm', {
+        alarmName: `cloudfront-4xx-errors-${props.config.environment}`,
+        metric: new cdk.aws_cloudwatch.Metric({
+          namespace: 'AWS/CloudFront',
+          metricName: '4xxErrorRate',
+          dimensionsMap: {
+            DistributionId: this.distribution.distributionId
+          },
+          statistic: 'Average',
+          period: cdk.Duration.minutes(5)
         }),
-      },
+        threshold: 5, // 5%
+        evaluationPeriods: 2,
+        treatMissingData: cdk.aws_cloudwatch.TreatMissingData.NOT_BREACHING
+      });
+
+      // CloudFront 5XX errors
+      new cdk.aws_cloudwatch.Alarm(this, 'CloudFront5XXErrorAlarm', {
+        alarmName: `cloudfront-5xx-errors-${props.config.environment}`,
+        metric: new cdk.aws_cloudwatch.Metric({
+          namespace: 'AWS/CloudFront',
+          metricName: '5xxErrorRate',
+          dimensionsMap: {
+            DistributionId: this.distribution.distributionId
+          },
+          statistic: 'Average',
+          period: cdk.Duration.minutes(5)
+        }),
+        threshold: 1, // 1%
+        evaluationPeriods: 2,
+        treatMissingData: cdk.aws_cloudwatch.TreatMissingData.NOT_BREACHING
+      });
+
+      // CloudFront origin latency
+      new cdk.aws_cloudwatch.Alarm(this, 'CloudFrontLatencyAlarm', {
+        alarmName: `cloudfront-latency-${props.config.environment}`,
+        metric: new cdk.aws_cloudwatch.Metric({
+          namespace: 'AWS/CloudFront',
+          metricName: 'OriginLatency',
+          dimensionsMap: {
+            DistributionId: this.distribution.distributionId
+          },
+          statistic: 'Average',
+          period: cdk.Duration.minutes(5)
+        }),
+        threshold: 5000, // 5 seconds
+        evaluationPeriods: 3,
+        treatMissingData: cdk.aws_cloudwatch.TreatMissingData.NOT_BREACHING
+      });
+    }
+
+    // SSM Parameters
+    new cdk.aws_ssm.StringParameter(this, 'DistributionIdParameter', {
+      parameterName: `/basic-budget/${props.config.environment}/distribution-id`,
+      stringValue: this.distribution.distributionId
+    });
+
+    new cdk.aws_ssm.StringParameter(this, 'FrontendBucketParameter', {
+      parameterName: `/basic-budget/${props.config.environment}/frontend-bucket`,
+      stringValue: this.bucket.bucketName
+    });
+
+    new cdk.aws_ssm.StringParameter(this, 'BuildArtifactsBucketParameter', {
+      parameterName: `/basic-budget/${props.config.environment}/build-artifacts-bucket`,
+      stringValue: buildBucket.bucketName
     });
 
     // Outputs
-    new cdk.CfnOutput(this, 'BucketName', {
-      value: this.bucket.bucketName,
-      description: 'Frontend S3 Bucket Name',
-      exportName: `basic-budget-${config.environment}-frontend-bucket`,
-    });
-
     new cdk.CfnOutput(this, 'DistributionId', {
       value: this.distribution.distributionId,
-      description: 'CloudFront Distribution ID',
-      exportName: `basic-budget-${config.environment}-distribution-id`,
+      exportName: `basic-budget-${props.config.environment}-distribution-id`
     });
 
     new cdk.CfnOutput(this, 'DistributionDomainName', {
       value: this.distribution.distributionDomainName,
-      description: 'CloudFront Distribution Domain Name',
-      exportName: `basic-budget-${config.environment}-distribution-domain`,
+      exportName: `basic-budget-${props.config.environment}-distribution-domain`
     });
 
-    new cdk.CfnOutput(this, 'DeploymentRoleArn', {
-      value: deploymentRole.roleArn,
-      description: 'GitHub Actions Deployment Role ARN',
-      exportName: `basic-budget-${config.environment}-frontend-deploy-role`,
+    new cdk.CfnOutput(this, 'FrontendBucketName', {
+      value: this.bucket.bucketName,
+      exportName: `basic-budget-${props.config.environment}-frontend-bucket`
     });
 
-    // Tags
-    cdk.Tags.of(this).add('Stack', 'Frontend');
-    Object.entries(config.tags).forEach(([key, value]) => {
+    new cdk.CfnOutput(this, 'BuildArtifactsBucketName', {
+      value: buildBucket.bucketName,
+      exportName: `basic-budget-${props.config.environment}-build-artifacts-bucket`
+    });
+
+    if (props.config.domainName) {
+      new cdk.CfnOutput(this, 'WebsiteURL', {
+        value: `https://${props.config.domainName}`,
+        exportName: `basic-budget-${props.config.environment}-website-url`
+      });
+    } else {
+      new cdk.CfnOutput(this, 'WebsiteURL', {
+        value: `https://${this.distribution.distributionDomainName}`,
+        exportName: `basic-budget-${props.config.environment}-website-url`
+      });
+    }
+
+    // Apply tags
+    Object.entries(props.config.tags).forEach(([key, value]) => {
       cdk.Tags.of(this).add(key, value);
     });
-  }
-
-  public updateApiOrigin(apiDomainName: string): void {
-    // This method can be called after the API stack is created to update the CloudFront behavior
-    // In practice, you would need to update the distribution configuration
-    // For now, this serves as a placeholder for the pattern
   }
 }

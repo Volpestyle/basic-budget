@@ -1,402 +1,227 @@
 import { Hono } from 'hono';
-import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { prisma } from '@/lib/prisma';
-import { cache } from '@/lib/cache';
-import { FileStorage, S3Service } from '@/lib/s3';
-import { authMiddleware, requireUserId } from '@/middleware/auth';
-import { standardRateLimit, strictRateLimit } from '@/middleware/rateLimit';
-import { paystubUploadSchema, paystubDataSchema, paginationSchema, dateRangeSchema } from '@/validators';
+import { zValidator } from '@hono/zod-validator';
+import { auth } from '../middleware/auth';
+import { db, paystubs } from '../db';
+import { eq, and, desc } from 'drizzle-orm';
+import { HTTPException } from 'hono/http-exception';
+import { queuePaystubProcessing } from '../queue';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { config } from '../config';
+import { nanoid } from 'nanoid';
 
-const paystubs = new Hono();
+const paystubsRouter = new Hono();
 
-// Apply middleware
-paystubs.use('*', authMiddleware);
-paystubs.use('/upload', requireUserId, strictRateLimit);
-paystubs.use('*', standardRateLimit);
+// Apply auth middleware to all routes
+paystubsRouter.use('*', auth);
 
-// GET /paystubs - List paystubs
-paystubs.get('/',
-  requireUserId,
-  zValidator('query', paginationSchema.merge(dateRangeSchema)),
-  async (c) => {
-    const userId = c.get('userId')!;
-    const { page, limit, sort = 'uploadedAt', order, startDate, endDate } = c.req.valid('query');
-    
-    // Build where clause
-    const where: any = {
-      userId,
-      ...(startDate && { payDate: { gte: new Date(startDate) } }),
-      ...(endDate && { payDate: { ...where?.payDate, lte: new Date(endDate) } }),
-    };
-    
-    const [paystubs, total] = await Promise.all([
-      prisma.paystub.findMany({
-        where,
-        select: {
-          id: true,
-          fileName: true,
-          fileSize: true,
-          mimeType: true,
-          uploadedAt: true,
-          processedAt: true,
-          employerName: true,
-          payPeriodStart: true,
-          payPeriodEnd: true,
-          payDate: true,
-          grossPay: true,
-          netPay: true,
-        },
-        orderBy: { [sort]: order },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      prisma.paystub.count({ where }),
-    ]);
-    
-    const response = {
-      data: paystubs.map(p => ({
-        ...p,
-        grossPay: p.grossPay ? Number(p.grossPay) : null,
-        netPay: p.netPay ? Number(p.netPay) : null,
-      })),
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
+// Initialize S3 client if configured
+const s3Client = config.AWS_ACCESS_KEY_ID && config.AWS_SECRET_ACCESS_KEY
+  ? new S3Client({
+      region: config.AWS_REGION,
+      credentials: {
+        accessKeyId: config.AWS_ACCESS_KEY_ID,
+        secretAccessKey: config.AWS_SECRET_ACCESS_KEY,
       },
-    };
-    
-    return c.json(response);
-  }
-);
+    })
+  : null;
 
-// GET /paystubs/summary - Get paystub summary
-paystubs.get('/summary',
-  requireUserId,
-  zValidator('query', dateRangeSchema),
-  async (c) => {
-    const userId = c.get('userId')!;
-    const { startDate, endDate } = c.req.valid('query');
-    
-    // Build date filter
-    const dateFilter = {
-      ...(startDate && { gte: new Date(startDate) }),
-      ...(endDate && { lte: new Date(endDate) }),
-    };
-    
-    const [totalGross, totalNet, totalFederal, totalState, count] = await Promise.all([
-      prisma.paystub.aggregate({
-        where: {
-          userId,
-          payDate: dateFilter,
-        },
-        _sum: { grossPay: true },
-      }),
-      prisma.paystub.aggregate({
-        where: {
-          userId,
-          payDate: dateFilter,
-        },
-        _sum: { netPay: true },
-      }),
-      prisma.paystub.aggregate({
-        where: {
-          userId,
-          payDate: dateFilter,
-        },
-        _sum: { federalTax: true },
-      }),
-      prisma.paystub.aggregate({
-        where: {
-          userId,
-          payDate: dateFilter,
-        },
-        _sum: { stateTax: true },
-      }),
-      prisma.paystub.count({
-        where: {
-          userId,
-          payDate: dateFilter,
-        },
-      }),
-    ]);
-    
-    return c.json({
-      totalGrossPay: Number(totalGross._sum.grossPay || 0),
-      totalNetPay: Number(totalNet._sum.netPay || 0),
-      totalFederalTax: Number(totalFederal._sum.federalTax || 0),
-      totalStateTax: Number(totalState._sum.stateTax || 0),
-      paystubCount: count,
-      averageGrossPay: count > 0 ? Number(totalGross._sum.grossPay || 0) / count : 0,
-      averageNetPay: count > 0 ? Number(totalNet._sum.netPay || 0) / count : 0,
+// List paystubs
+paystubsRouter.get('/', async (c) => {
+  const user = c.get('user');
+  const limit = parseInt(c.req.query('limit') || '20');
+  const offset = parseInt(c.req.query('offset') || '0');
+  const status = c.req.query('status');
+  
+  let conditions: any[] = [eq(paystubs.userId, user.id)];
+  
+  if (status) {
+    conditions.push(eq(paystubs.status, status as any));
+  }
+  
+  const paystubList = await db
+    .select()
+    .from(paystubs)
+    .where(and(...conditions))
+    .orderBy(desc(paystubs.createdAt))
+    .limit(limit)
+    .offset(offset);
+  
+  return c.json(paystubList);
+});
+
+// Get single paystub
+paystubsRouter.get('/:id', async (c) => {
+  const user = c.get('user');
+  const paystubId = c.req.param('id');
+  
+  const [paystub] = await db
+    .select()
+    .from(paystubs)
+    .where(
+      and(
+        eq(paystubs.id, paystubId),
+        eq(paystubs.userId, user.id)
+      )
+    )
+    .limit(1);
+  
+  if (!paystub) {
+    throw new HTTPException(404, { message: 'Paystub not found' });
+  }
+  
+  return c.json(paystub);
+});
+
+// Upload paystub
+paystubsRouter.post('/upload', async (c) => {
+  const user = c.get('user');
+  
+  // Parse multipart form data
+  const formData = await c.req.formData();
+  const file = formData.get('file') as File;
+  
+  if (!file) {
+    throw new HTTPException(400, { message: 'No file provided' });
+  }
+  
+  // Validate file type
+  const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
+  if (!allowedTypes.includes(file.type)) {
+    throw new HTTPException(400, { 
+      message: 'Invalid file type. Only PDF and images are allowed.' 
     });
   }
-);
-
-// GET /paystubs/:id - Get specific paystub
-paystubs.get('/:id',
-  requireUserId,
-  async (c) => {
-    const userId = c.get('userId')!;
-    const paystubId = c.req.param('id');
+  
+  // Validate file size (max 10MB)
+  const maxSize = 10 * 1024 * 1024;
+  if (file.size > maxSize) {
+    throw new HTTPException(400, { 
+      message: 'File too large. Maximum size is 10MB.' 
+    });
+  }
+  
+  let fileUrl: string;
+  
+  if (s3Client && config.S3_BUCKET_NAME) {
+    // Upload to S3
+    const fileKey = `paystubs/${user.id}/${nanoid()}-${file.name}`;
+    const buffer = await file.arrayBuffer();
     
-    const paystub = await prisma.paystub.findFirst({
-      where: {
-        id: paystubId,
-        userId,
+    const command = new PutObjectCommand({
+      Bucket: config.S3_BUCKET_NAME,
+      Key: fileKey,
+      Body: new Uint8Array(buffer),
+      ContentType: file.type,
+      Metadata: {
+        userId: user.id,
+        originalName: file.name,
       },
     });
     
-    if (!paystub) {
-      return c.json({ error: 'Paystub not found' }, 404);
-    }
-    
-    // Generate download URL if using S3
-    let downloadUrl: string | null = null;
-    if (S3Service.isEnabled() && paystub.fileUrl) {
-      try {
-        downloadUrl = await S3Service.getDownloadUrl(paystub.fileUrl);
-      } catch (error) {
-        console.error('Failed to generate download URL:', error);
-      }
-    }
-    
-    return c.json({
-      ...paystub,
-      grossPay: paystub.grossPay ? Number(paystub.grossPay) : null,
-      netPay: paystub.netPay ? Number(paystub.netPay) : null,
-      federalTax: paystub.federalTax ? Number(paystub.federalTax) : null,
-      stateTax: paystub.stateTax ? Number(paystub.stateTax) : null,
-      socialSecurity: paystub.socialSecurity ? Number(paystub.socialSecurity) : null,
-      medicare: paystub.medicare ? Number(paystub.medicare) : null,
-      downloadUrl,
+    await s3Client.send(command);
+    fileUrl = `https://${config.S3_BUCKET_NAME}.s3.${config.AWS_REGION}.amazonaws.com/${fileKey}`;
+  } else {
+    // Local storage fallback (for development)
+    const buffer = await file.arrayBuffer();
+    const base64 = Buffer.from(buffer).toString('base64');
+    fileUrl = `data:${file.type};base64,${base64}`;
+  }
+  
+  // Create paystub record
+  const [paystub] = await db
+    .insert(paystubs)
+    .values({
+      userId: user.id,
+      fileUrl,
+      fileName: file.name,
+      fileSize: file.size,
+      mimeType: file.type,
+      status: 'pending',
+    })
+    .returning();
+  
+  if (!paystub) {
+    throw new HTTPException(500, { message: 'Failed to create paystub record' });
+  }
+  
+  // Queue for processing
+  await queuePaystubProcessing(paystub.id, user.id, fileUrl);
+  
+  return c.json({
+    message: 'Paystub uploaded successfully',
+    paystub,
+  }, 201);
+});
+
+// Delete paystub
+paystubsRouter.delete('/:id', async (c) => {
+  const user = c.get('user');
+  const paystubId = c.req.param('id');
+  
+  // Check ownership
+  const [existing] = await db
+    .select()
+    .from(paystubs)
+    .where(
+      and(
+        eq(paystubs.id, paystubId),
+        eq(paystubs.userId, user.id)
+      )
+    )
+    .limit(1);
+  
+  if (!existing) {
+    throw new HTTPException(404, { message: 'Paystub not found' });
+  }
+  
+  // TODO: Delete file from S3 if using S3 storage
+  
+  // Delete paystub record
+  await db
+    .delete(paystubs)
+    .where(eq(paystubs.id, paystubId));
+  
+  return c.json({ message: 'Paystub deleted successfully' });
+});
+
+// Retry processing for failed paystubs
+paystubsRouter.post('/:id/retry', async (c) => {
+  const user = c.get('user');
+  const paystubId = c.req.param('id');
+  
+  // Get paystub
+  const [paystub] = await db
+    .select()
+    .from(paystubs)
+    .where(
+      and(
+        eq(paystubs.id, paystubId),
+        eq(paystubs.userId, user.id),
+        eq(paystubs.status, 'failed')
+      )
+    )
+    .limit(1);
+  
+  if (!paystub) {
+    throw new HTTPException(404, { 
+      message: 'Paystub not found or not in failed state' 
     });
   }
-);
+  
+  // Reset status and queue for reprocessing
+  await db
+    .update(paystubs)
+    .set({
+      status: 'pending',
+      errorMessage: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(paystubs.id, paystubId));
+  
+  await queuePaystubProcessing(paystubId, user.id, paystub.fileUrl);
+  
+  return c.json({ message: 'Paystub queued for reprocessing' });
+});
 
-// POST /paystubs/upload - Upload paystub
-paystubs.post('/upload',
-  async (c) => {
-    const userId = c.get('userId')!;
-    
-    try {
-      const formData = await c.req.formData();
-      const file = formData.get('file') as File;
-      
-      if (!file) {
-        return c.json({ error: 'No file provided' }, 400);
-      }
-      
-      // Validate file
-      const validation = paystubUploadSchema.safeParse({
-        fileName: file.name,
-        fileSize: file.size,
-        mimeType: file.type,
-      });
-      
-      if (!validation.success) {
-        return c.json({ error: 'Invalid file', details: validation.error }, 400);
-      }
-      
-      // Upload file
-      let fileUrl: string;
-      if (S3Service.isEnabled()) {
-        fileUrl = await S3Service.uploadFile(file, file.name, userId);
-      } else {
-        fileUrl = await FileStorage.uploadFile(file, file.name, userId);
-      }
-      
-      // Create paystub record
-      const paystub = await prisma.paystub.create({
-        data: {
-          userId,
-          fileName: file.name,
-          fileUrl,
-          fileSize: file.size,
-          mimeType: file.type,
-        },
-      });
-      
-      // Queue for processing (in production, use a job queue)
-      processPaystub(paystub.id, file).catch(console.error);
-      
-      // Invalidate cache
-      await cache.invalidatePattern(`paystubs:${userId}:*`);
-      
-      return c.json({
-        id: paystub.id,
-        fileName: paystub.fileName,
-        uploadedAt: paystub.uploadedAt,
-        status: 'processing',
-      }, 201);
-    } catch (error) {
-      console.error('Upload error:', error);
-      return c.json({ error: 'Upload failed' }, 500);
-    }
-  }
-);
-
-// POST /paystubs/upload-url - Get presigned upload URL (for direct browser upload)
-paystubs.post('/upload-url',
-  requireUserId,
-  zValidator('json', z.object({
-    fileName: z.string().min(1).max(255),
-    contentType: z.string(),
-  })),
-  async (c) => {
-    const userId = c.get('userId')!;
-    const { fileName, contentType } = c.req.valid('json');
-    
-    if (!S3Service.isEnabled()) {
-      return c.json({ error: 'Direct upload not available' }, 501);
-    }
-    
-    try {
-      const { uploadUrl, key } = await S3Service.getUploadUrl(
-        fileName,
-        contentType,
-        userId
-      );
-      
-      // Create placeholder record
-      const paystub = await prisma.paystub.create({
-        data: {
-          userId,
-          fileName,
-          fileUrl: key,
-          fileSize: 0, // Will be updated after upload
-          mimeType: contentType,
-        },
-      });
-      
-      return c.json({
-        uploadUrl,
-        paystubId: paystub.id,
-      });
-    } catch (error) {
-      console.error('Presigned URL error:', error);
-      return c.json({ error: 'Failed to generate upload URL' }, 500);
-    }
-  }
-);
-
-// PUT /paystubs/:id - Update paystub data
-paystubs.put('/:id',
-  requireUserId,
-  zValidator('json', paystubDataSchema),
-  async (c) => {
-    const userId = c.get('userId')!;
-    const paystubId = c.req.param('id');
-    const data = c.req.valid('json');
-    
-    // Verify ownership
-    const existing = await prisma.paystub.findFirst({
-      where: {
-        id: paystubId,
-        userId,
-      },
-    });
-    
-    if (!existing) {
-      return c.json({ error: 'Paystub not found' }, 404);
-    }
-    
-    // Update paystub
-    const paystub = await prisma.paystub.update({
-      where: { id: paystubId },
-      data: {
-        employerName: data.employerName,
-        payPeriodStart: data.payPeriodStart ? new Date(data.payPeriodStart) : undefined,
-        payPeriodEnd: data.payPeriodEnd ? new Date(data.payPeriodEnd) : undefined,
-        payDate: data.payDate ? new Date(data.payDate) : undefined,
-        grossPay: data.grossPay,
-        netPay: data.netPay,
-        federalTax: data.federalTax,
-        stateTax: data.stateTax,
-        socialSecurity: data.socialSecurity,
-        medicare: data.medicare,
-        metadata: data.metadata,
-        processedAt: new Date(),
-      },
-    });
-    
-    // Invalidate cache
-    await cache.invalidatePattern(`paystubs:${userId}:*`);
-    
-    return c.json({
-      ...paystub,
-      grossPay: paystub.grossPay ? Number(paystub.grossPay) : null,
-      netPay: paystub.netPay ? Number(paystub.netPay) : null,
-      federalTax: paystub.federalTax ? Number(paystub.federalTax) : null,
-      stateTax: paystub.stateTax ? Number(paystub.stateTax) : null,
-      socialSecurity: paystub.socialSecurity ? Number(paystub.socialSecurity) : null,
-      medicare: paystub.medicare ? Number(paystub.medicare) : null,
-    });
-  }
-);
-
-// DELETE /paystubs/:id - Delete paystub
-paystubs.delete('/:id',
-  requireUserId,
-  async (c) => {
-    const userId = c.get('userId')!;
-    const paystubId = c.req.param('id');
-    
-    // Verify ownership
-    const paystub = await prisma.paystub.findFirst({
-      where: {
-        id: paystubId,
-        userId,
-      },
-    });
-    
-    if (!paystub) {
-      return c.json({ error: 'Paystub not found' }, 404);
-    }
-    
-    // Delete file
-    if (paystub.fileUrl) {
-      try {
-        if (S3Service.isEnabled()) {
-          await S3Service.deleteFile(paystub.fileUrl);
-        } else {
-          await FileStorage.deleteFile(paystub.fileUrl);
-        }
-      } catch (error) {
-        console.error('File deletion error:', error);
-      }
-    }
-    
-    // Delete record
-    await prisma.paystub.delete({
-      where: { id: paystubId },
-    });
-    
-    // Invalidate cache
-    await cache.invalidatePattern(`paystubs:${userId}:*`);
-    
-    return c.json({ success: true });
-  }
-);
-
-// Process paystub (extract data from PDF/image)
-async function processPaystub(paystubId: string, file: File) {
-  try {
-    // In production, this would use OCR/AI services to extract data
-    // For now, we'll just mark it as processed
-    
-    await prisma.paystub.update({
-      where: { id: paystubId },
-      data: {
-        processedAt: new Date(),
-        // In production, extracted data would be saved here
-      },
-    });
-  } catch (error) {
-    console.error('Paystub processing error:', error);
-  }
-}
-
-export default paystubs;
+export { paystubsRouter };

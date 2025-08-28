@@ -1,51 +1,51 @@
-# Multi-stage build for minimal image size
+# Multi-stage build for minimal Lambda container
 FROM golang:1.21-alpine AS builder
 
 # Install build dependencies
-RUN apk add --no-cache gcc musl-dev
+RUN apk add --no-cache git gcc musl-dev
 
+# Set working directory
 WORKDIR /app
 
 # Copy go mod files
 COPY go.mod go.sum ./
+
+# Download dependencies
 RUN go mod download
 
 # Copy source code
 COPY . .
 
-# Build the application
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o paystub-extractor .
+# Build the binary with optimizations for size
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s" \
+    -o paystub-extractor \
+    cmd/server/main.go
 
-# Runtime stage
-FROM alpine:latest
+# Runtime stage - using Lambda base image
+FROM public.ecr.aws/lambda/provided:al2
 
 # Install runtime dependencies
-RUN apk add --no-cache \
-    ca-certificates \
-    tesseract-ocr \
-    tesseract-ocr-data-eng \
+RUN yum install -y \
+    tesseract \
+    tesseract-langpack-eng \
     poppler-utils \
-    ghostscript \
-    && rm -rf /var/cache/apk/*
-
-WORKDIR /app
+    ImageMagick \
+    && yum clean all \
+    && rm -rf /var/cache/yum
 
 # Copy binary from builder
-COPY --from=builder /app/paystub-extractor .
+COPY --from=builder /app/paystub-extractor /var/task/paystub-extractor
 
-# Set environment variables
-ENV PORT=8080 \
-    RUN_MODE=server \
-    ENABLE_OCR=true \
-    MAX_FILE_SIZE=10485760 \
-    LOG_LEVEL=info
+# Lambda handler configuration
+ENV PORT=8080
+ENV ENABLE_OCR=true
+ENV CACHE_ENABLED=true
+ENV MAX_FILE_SIZE=10485760
+ENV PROCESSING_TIMEOUT_SECONDS=30
 
-# Expose port
-EXPOSE 8080
+# Lambda runtime interface
+COPY lambda-entrypoint.sh /var/task/
+RUN chmod +x /var/task/lambda-entrypoint.sh
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
-
-# Run the application
-CMD ["./paystub-extractor"]
+ENTRYPOINT ["/var/task/lambda-entrypoint.sh"]

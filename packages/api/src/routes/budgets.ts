@@ -1,482 +1,354 @@
 import { Hono } from 'hono';
-import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { prisma } from '@/lib/prisma';
-import { cache } from '@/lib/cache';
-import { authMiddleware, requireUserId } from '@/middleware/auth';
-import { standardRateLimit } from '@/middleware/rateLimit';
-import { 
-  createBudgetSchema, 
-  updateBudgetSchema,
-  budgetCategorySchema,
-  paginationSchema
-} from '@/validators';
+import { zValidator } from '@hono/zod-validator';
+import { auth } from '../middleware/auth';
+import { db, budgets, categories, transactions } from '../db';
+import { eq, and, gte, lte, sql, desc } from 'drizzle-orm';
+import { HTTPException } from 'hono/http-exception';
+import { Cache } from '../lib/redis';
 
-const budgets = new Hono();
+const budgetsRouter = new Hono();
 
-// Apply middleware
-budgets.use('*', authMiddleware, standardRateLimit);
+// Apply auth middleware to all routes
+budgetsRouter.use('*', auth);
 
-// GET /budgets - List budgets
-budgets.get('/',
-  requireUserId,
-  zValidator('query', paginationSchema),
+// Validation schemas
+const createBudgetSchema = z.object({
+  name: z.string().min(1).max(100),
+  description: z.string().optional(),
+  period: z.enum(['weekly', 'biweekly', 'monthly', 'yearly']),
+  amount: z.number().positive(),
+  currency: z.string().default('USD'),
+  startDate: z.string().datetime(),
+  endDate: z.string().datetime().optional(),
+});
+
+const updateBudgetSchema = createBudgetSchema.partial();
+
+const budgetQuerySchema = z.object({
+  active: z.enum(['true', 'false']).optional(),
+  period: z.enum(['weekly', 'biweekly', 'monthly', 'yearly']).optional(),
+  limit: z.string().transform(Number).default('10'),
+  offset: z.string().transform(Number).default('0'),
+});
+
+// List budgets
+budgetsRouter.get('/',
+  zValidator('query', budgetQuerySchema),
   async (c) => {
-    const userId = c.get('userId')!;
-    const { page, limit, sort = 'month', order } = c.req.valid('query');
+    const user = c.get('user');
+    const query = c.req.valid('query');
     
     // Check cache
-    const cacheKey = `budgets:${userId}:${page}:${limit}:${sort}:${order}`;
-    const cached = await cache.get(cacheKey);
-    if (cached) return c.json(cached);
+    const cacheKey = `budgets:${user.id}:${JSON.stringify(query)}`;
+    const cached = await Cache.get<any>(cacheKey);
     
-    const [budgets, total] = await Promise.all([
-      prisma.budget.findMany({
-        where: { 
-          userId,
-          // For anonymous users, filter by userId pattern
-          ...(userId.startsWith('anon_') ? {} : { user: { id: userId } })
-        },
-        include: {
-          categories: {
-            orderBy: { sortOrder: 'asc' },
-          },
-        },
-        orderBy: { [sort]: order },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      prisma.budget.count({
-        where: { userId },
-      }),
-    ]);
-    
-    const response = {
-      data: budgets,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
-    
-    // Cache for 60 seconds
-    await cache.set(cacheKey, response, 60);
-    
-    return c.json(response);
-  }
-);
-
-// GET /budgets/current - Get current month's budget
-budgets.get('/current',
-  requireUserId,
-  async (c) => {
-    const userId = c.get('userId')!;
-    const currentMonth = parseInt(
-      new Date().toISOString().slice(0, 7).replace('-', '')
-    );
-    
-    // Check cache
-    const cacheKey = `budget:${userId}:current`;
-    const cached = await cache.get(cacheKey);
-    if (cached) return c.json(cached);
-    
-    const budget = await prisma.budget.findFirst({
-      where: {
-        userId,
-        month: currentMonth,
-        isActive: true,
-      },
-      include: {
-        categories: {
-          include: {
-            transactions: {
-              include: {
-                transaction: true,
-              },
-            },
-          },
-          orderBy: { sortOrder: 'asc' },
-        },
-      },
-    });
-    
-    if (!budget) {
-      return c.json({ error: 'No budget found for current month' }, 404);
+    if (cached) {
+      c.header('X-Cache', 'HIT');
+      return c.json(cached);
     }
     
-    // Calculate spent amounts
-    const categoriesWithSpent = budget.categories.map(category => ({
-      ...category,
-      spent: category.transactions.reduce(
-        (sum, mapping) => sum + Number(mapping.transaction.amount),
-        0
-      ),
-      transactions: undefined, // Remove transaction details from response
-    }));
+    // Build query
+    let conditions = [eq(budgets.userId, user.id)];
     
-    const response = {
-      ...budget,
-      categories: categoriesWithSpent,
-    };
-    
-    // Cache for 30 seconds
-    await cache.set(cacheKey, response, 30);
-    
-    return c.json(response);
-  }
-);
-
-// GET /budgets/:id - Get specific budget
-budgets.get('/:id',
-  requireUserId,
-  async (c) => {
-    const userId = c.get('userId')!;
-    const budgetId = c.req.param('id');
-    
-    const budget = await prisma.budget.findFirst({
-      where: {
-        id: budgetId,
-        userId,
-      },
-      include: {
-        categories: {
-          orderBy: { sortOrder: 'asc' },
-        },
-      },
-    });
-    
-    if (!budget) {
-      return c.json({ error: 'Budget not found' }, 404);
+    if (query.active !== undefined) {
+      conditions.push(eq(budgets.isActive, query.active === 'true'));
     }
     
-    return c.json(budget);
+    if (query.period) {
+      conditions.push(eq(budgets.period, query.period));
+    }
+    
+    // Get budgets with category count
+    const budgetList = await db
+      .select({
+        budget: budgets,
+        categoryCount: sql<number>`count(${categories.id})::int`,
+      })
+      .from(budgets)
+      .leftJoin(categories, eq(categories.budgetId, budgets.id))
+      .where(and(...conditions))
+      .groupBy(budgets.id)
+      .orderBy(desc(budgets.createdAt))
+      .limit(query.limit)
+      .offset(query.offset);
+    
+    // Get total count
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(budgets)
+      .where(and(...conditions));
+    
+    const result = {
+      budgets: budgetList.map(b => ({
+        ...b.budget,
+        categoryCount: b.categoryCount,
+      })),
+      total: count,
+      limit: query.limit,
+      offset: query.offset,
+    };
+    
+    // Cache for 1 minute
+    await Cache.set(cacheKey, result, 60);
+    
+    c.header('X-Cache', 'MISS');
+    return c.json(result);
   }
 );
 
-// POST /budgets - Create budget
-budgets.post('/',
-  requireUserId,
+// Get single budget
+budgetsRouter.get('/:id', async (c) => {
+  const user = c.get('user');
+  const budgetId = c.req.param('id');
+  
+  // Check cache
+  const cacheKey = `budget:${budgetId}`;
+  const cached = await Cache.get<any>(cacheKey);
+  
+  if (cached) {
+    c.header('X-Cache', 'HIT');
+    return c.json(cached);
+  }
+  
+  // Get budget with stats
+  const [budget] = await db
+    .select({
+      budget: budgets,
+      categoryCount: sql<number>`count(distinct ${categories.id})::int`,
+      transactionCount: sql<number>`count(distinct ${transactions.id})::int`,
+      totalSpent: sql<number>`coalesce(sum(case when ${transactions.type} = 'expense' then ${transactions.amount}::numeric else 0 end), 0)`,
+      totalIncome: sql<number>`coalesce(sum(case when ${transactions.type} = 'income' then ${transactions.amount}::numeric else 0 end), 0)`,
+    })
+    .from(budgets)
+    .leftJoin(categories, eq(categories.budgetId, budgets.id))
+    .leftJoin(transactions, eq(transactions.budgetId, budgets.id))
+    .where(
+      and(
+        eq(budgets.id, budgetId),
+        eq(budgets.userId, user.id)
+      )
+    )
+    .groupBy(budgets.id)
+    .limit(1);
+  
+  if (!budget) {
+    throw new HTTPException(404, { message: 'Budget not found' });
+  }
+  
+  const result = {
+    ...budget.budget,
+    stats: {
+      categoryCount: budget.categoryCount,
+      transactionCount: budget.transactionCount,
+      totalSpent: budget.totalSpent,
+      totalIncome: budget.totalIncome,
+      remaining: Number(budget.budget.amount) - budget.totalSpent,
+    },
+  };
+  
+  // Cache for 30 seconds
+  await Cache.set(cacheKey, result, 30);
+  
+  c.header('X-Cache', 'MISS');
+  return c.json(result);
+});
+
+// Create budget
+budgetsRouter.post('/',
   zValidator('json', createBudgetSchema),
   async (c) => {
-    const userId = c.get('userId')!;
+    const user = c.get('user');
     const data = c.req.valid('json');
     
-    // Check if budget already exists for this month
-    const existing = await prisma.budget.findFirst({
-      where: {
-        userId,
-        month: data.month,
-      },
-    });
-    
-    if (existing) {
-      return c.json({ error: 'Budget already exists for this month' }, 409);
-    }
-    
-    // Create budget with categories
-    const budget = await prisma.budget.create({
-      data: {
-        userId,
+    // Create budget
+    const [budget] = await db
+      .insert(budgets)
+      .values({
+        userId: user.id,
         name: data.name,
-        month: data.month,
-        totalIncome: data.totalIncome,
-        categories: {
-          create: data.categories.map((cat, index) => ({
-            name: cat.name,
-            planned: cat.planned,
-            color: cat.color,
-            icon: cat.icon,
-            sortOrder: cat.sortOrder ?? index,
-          })),
-        },
-      },
-      include: {
-        categories: {
-          orderBy: { sortOrder: 'asc' },
-        },
-      },
-    });
+        description: data.description,
+        period: data.period,
+        amount: data.amount.toString(),
+        currency: data.currency,
+        startDate: new Date(data.startDate),
+        endDate: data.endDate ? new Date(data.endDate) : undefined,
+        isActive: true,
+      })
+      .returning();
     
-    // Invalidate cache
-    await cache.invalidatePattern(`budgets:${userId}:*`);
-    await cache.del(`budget:${userId}:current`);
+    // Clear cache
+    await Cache.deletePattern(`budgets:${user.id}:*`);
     
     return c.json(budget, 201);
   }
 );
 
-// PUT /budgets/:id - Update budget
-budgets.put('/:id',
-  requireUserId,
+// Update budget
+budgetsRouter.patch('/:id',
   zValidator('json', updateBudgetSchema),
   async (c) => {
-    const userId = c.get('userId')!;
+    const user = c.get('user');
     const budgetId = c.req.param('id');
     const data = c.req.valid('json');
     
-    // Verify ownership
-    const existing = await prisma.budget.findFirst({
-      where: {
-        id: budgetId,
-        userId,
-      },
-    });
+    // Check ownership
+    const [existing] = await db
+      .select()
+      .from(budgets)
+      .where(
+        and(
+          eq(budgets.id, budgetId),
+          eq(budgets.userId, user.id)
+        )
+      )
+      .limit(1);
     
     if (!existing) {
-      return c.json({ error: 'Budget not found' }, 404);
+      throw new HTTPException(404, { message: 'Budget not found' });
     }
     
     // Update budget
-    const budget = await prisma.budget.update({
-      where: { id: budgetId },
-      data: {
-        name: data.name,
-        totalIncome: data.totalIncome,
-        // Handle categories update if provided
-        ...(data.categories && {
-          categories: {
-            deleteMany: {}, // Remove all existing categories
-            create: data.categories.map((cat, index) => ({
-              name: cat.name,
-              planned: cat.planned,
-              color: cat.color,
-              icon: cat.icon,
-              sortOrder: cat.sortOrder ?? index,
-            })),
-          },
-        }),
-      },
-      include: {
-        categories: {
-          orderBy: { sortOrder: 'asc' },
-        },
-      },
-    });
+    const updates: any = {
+      updatedAt: new Date(),
+    };
     
-    // Invalidate cache
-    await cache.invalidatePattern(`budgets:${userId}:*`);
-    await cache.del(`budget:${userId}:current`);
+    if (data.name !== undefined) updates.name = data.name;
+    if (data.description !== undefined) updates.description = data.description;
+    if (data.period !== undefined) updates.period = data.period;
+    if (data.amount !== undefined) updates.amount = data.amount.toString();
+    if (data.currency !== undefined) updates.currency = data.currency;
+    if (data.startDate !== undefined) updates.startDate = new Date(data.startDate);
+    if (data.endDate !== undefined) updates.endDate = new Date(data.endDate);
     
-    return c.json(budget);
+    const [updated] = await db
+      .update(budgets)
+      .set(updates)
+      .where(eq(budgets.id, budgetId))
+      .returning();
+    
+    // Clear cache
+    await Cache.deletePattern(`budget*:${budgetId}*`);
+    await Cache.deletePattern(`budgets:${user.id}:*`);
+    
+    return c.json(updated);
   }
 );
 
-// DELETE /budgets/:id - Delete budget
-budgets.delete('/:id',
-  requireUserId,
-  async (c) => {
-    const userId = c.get('userId')!;
-    const budgetId = c.req.param('id');
-    
-    // Verify ownership
-    const existing = await prisma.budget.findFirst({
-      where: {
-        id: budgetId,
-        userId,
-      },
-    });
-    
-    if (!existing) {
-      return c.json({ error: 'Budget not found' }, 404);
-    }
-    
-    // Delete budget (cascade will handle categories)
-    await prisma.budget.delete({
-      where: { id: budgetId },
-    });
-    
-    // Invalidate cache
-    await cache.invalidatePattern(`budgets:${userId}:*`);
-    await cache.del(`budget:${userId}:current`);
-    
-    return c.json({ success: true });
+// Delete budget
+budgetsRouter.delete('/:id', async (c) => {
+  const user = c.get('user');
+  const budgetId = c.req.param('id');
+  
+  // Check ownership
+  const [existing] = await db
+    .select()
+    .from(budgets)
+    .where(
+      and(
+        eq(budgets.id, budgetId),
+        eq(budgets.userId, user.id)
+      )
+    )
+    .limit(1);
+  
+  if (!existing) {
+    throw new HTTPException(404, { message: 'Budget not found' });
   }
-);
+  
+  // Soft delete by setting inactive
+  await db
+    .update(budgets)
+    .set({ 
+      isActive: false,
+      updatedAt: new Date(),
+    })
+    .where(eq(budgets.id, budgetId));
+  
+  // Clear cache
+  await Cache.deletePattern(`budget*:${budgetId}*`);
+  await Cache.deletePattern(`budgets:${user.id}:*`);
+  
+  return c.json({ message: 'Budget deleted successfully' });
+});
 
-// POST /budgets/:id/categories - Add category to budget
-budgets.post('/:id/categories',
-  requireUserId,
-  zValidator('json', budgetCategorySchema),
-  async (c) => {
-    const userId = c.get('userId')!;
-    const budgetId = c.req.param('id');
-    const data = c.req.valid('json');
-    
-    // Verify ownership
-    const budget = await prisma.budget.findFirst({
-      where: {
-        id: budgetId,
-        userId,
-      },
-    });
-    
-    if (!budget) {
-      return c.json({ error: 'Budget not found' }, 404);
-    }
-    
-    // Get max sort order
-    const maxSortOrder = await prisma.budgetCategory.findFirst({
-      where: { budgetId },
-      orderBy: { sortOrder: 'desc' },
-      select: { sortOrder: true },
-    });
-    
-    // Create category
-    const category = await prisma.budgetCategory.create({
-      data: {
-        budgetId,
-        name: data.name,
-        planned: data.planned,
-        color: data.color,
-        icon: data.icon,
-        sortOrder: (maxSortOrder?.sortOrder ?? -1) + 1,
-      },
-    });
-    
-    // Invalidate cache
-    await cache.invalidatePattern(`budgets:${userId}:*`);
-    await cache.del(`budget:${userId}:current`);
-    
-    return c.json(category, 201);
+// Get budget summary/analytics
+budgetsRouter.get('/:id/summary', async (c) => {
+  const user = c.get('user');
+  const budgetId = c.req.param('id');
+  
+  // Check ownership
+  const [budget] = await db
+    .select()
+    .from(budgets)
+    .where(
+      and(
+        eq(budgets.id, budgetId),
+        eq(budgets.userId, user.id)
+      )
+    )
+    .limit(1);
+  
+  if (!budget) {
+    throw new HTTPException(404, { message: 'Budget not found' });
   }
-);
+  
+  // Get category breakdown
+  const categoryBreakdown = await db
+    .select({
+      category: categories,
+      spent: sql<number>`coalesce(sum(${transactions.amount}::numeric), 0)`,
+      transactionCount: sql<number>`count(${transactions.id})::int`,
+    })
+    .from(categories)
+    .leftJoin(transactions, 
+      and(
+        eq(transactions.categoryId, categories.id),
+        eq(transactions.type, 'expense')
+      )
+    )
+    .where(eq(categories.budgetId, budgetId))
+    .groupBy(categories.id);
+  
+  // Get daily spending for the budget period
+  const dailySpending = await db
+    .select({
+      date: sql<string>`date(${transactions.date})`,
+      amount: sql<number>`sum(${transactions.amount}::numeric)`,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(transactions)
+    .where(
+      and(
+        eq(transactions.budgetId, budgetId),
+        eq(transactions.type, 'expense'),
+        gte(transactions.date, budget.startDate),
+        budget.endDate ? lte(transactions.date, budget.endDate) : sql`true`
+      )
+    )
+    .groupBy(sql`date(${transactions.date})`)
+    .orderBy(sql`date(${transactions.date})`);
+  
+  return c.json({
+    budget,
+    categoryBreakdown: categoryBreakdown.map(cb => ({
+      ...cb.category,
+      spent: cb.spent,
+      transactionCount: cb.transactionCount,
+      percentOfBudget: cb.category.budgetAmount 
+        ? (cb.spent / Number(cb.category.budgetAmount)) * 100
+        : 0,
+    })),
+    dailySpending,
+    summary: {
+      totalBudget: Number(budget.amount),
+      totalSpent: categoryBreakdown.reduce((sum, cb) => sum + cb.spent, 0),
+      remaining: Number(budget.amount) - categoryBreakdown.reduce((sum, cb) => sum + cb.spent, 0),
+      daysRemaining: budget.endDate 
+        ? Math.max(0, Math.ceil((new Date(budget.endDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+        : null,
+    },
+  });
+});
 
-// PUT /budgets/:id/categories/:categoryId - Update category
-budgets.put('/:id/categories/:categoryId',
-  requireUserId,
-  zValidator('json', budgetCategorySchema.partial()),
-  async (c) => {
-    const userId = c.get('userId')!;
-    const budgetId = c.req.param('id');
-    const categoryId = c.req.param('categoryId');
-    const data = c.req.valid('json');
-    
-    // Verify ownership
-    const budget = await prisma.budget.findFirst({
-      where: {
-        id: budgetId,
-        userId,
-      },
-    });
-    
-    if (!budget) {
-      return c.json({ error: 'Budget not found' }, 404);
-    }
-    
-    // Update category
-    const category = await prisma.budgetCategory.update({
-      where: { id: categoryId },
-      data,
-    });
-    
-    // Invalidate cache
-    await cache.invalidatePattern(`budgets:${userId}:*`);
-    await cache.del(`budget:${userId}:current`);
-    
-    return c.json(category);
-  }
-);
-
-// DELETE /budgets/:id/categories/:categoryId - Delete category
-budgets.delete('/:id/categories/:categoryId',
-  requireUserId,
-  async (c) => {
-    const userId = c.get('userId')!;
-    const budgetId = c.req.param('id');
-    const categoryId = c.req.param('categoryId');
-    
-    // Verify ownership
-    const budget = await prisma.budget.findFirst({
-      where: {
-        id: budgetId,
-        userId,
-      },
-    });
-    
-    if (!budget) {
-      return c.json({ error: 'Budget not found' }, 404);
-    }
-    
-    // Delete category
-    await prisma.budgetCategory.delete({
-      where: { id: categoryId },
-    });
-    
-    // Invalidate cache
-    await cache.invalidatePattern(`budgets:${userId}:*`);
-    await cache.del(`budget:${userId}:current`);
-    
-    return c.json({ success: true });
-  }
-);
-
-// POST /budgets/:id/duplicate - Duplicate budget to another month
-budgets.post('/:id/duplicate',
-  requireUserId,
-  zValidator('json', z.object({ month: z.number() })),
-  async (c) => {
-    const userId = c.get('userId')!;
-    const budgetId = c.req.param('id');
-    const { month } = c.req.valid('json');
-    
-    // Get source budget
-    const sourceBudget = await prisma.budget.findFirst({
-      where: {
-        id: budgetId,
-        userId,
-      },
-      include: {
-        categories: true,
-      },
-    });
-    
-    if (!sourceBudget) {
-      return c.json({ error: 'Budget not found' }, 404);
-    }
-    
-    // Check if target month already has a budget
-    const existing = await prisma.budget.findFirst({
-      where: {
-        userId,
-        month,
-      },
-    });
-    
-    if (existing) {
-      return c.json({ error: 'Budget already exists for target month' }, 409);
-    }
-    
-    // Create duplicate
-    const newBudget = await prisma.budget.create({
-      data: {
-        userId,
-        name: sourceBudget.name,
-        month,
-        totalIncome: sourceBudget.totalIncome,
-        categories: {
-          create: sourceBudget.categories.map(cat => ({
-            name: cat.name,
-            planned: cat.planned,
-            color: cat.color,
-            icon: cat.icon,
-            sortOrder: cat.sortOrder,
-          })),
-        },
-      },
-      include: {
-        categories: {
-          orderBy: { sortOrder: 'asc' },
-        },
-      },
-    });
-    
-    // Invalidate cache
-    await cache.invalidatePattern(`budgets:${userId}:*`);
-    
-    return c.json(newBudget, 201);
-  }
-);
-
-export default budgets;
+export { budgetsRouter };

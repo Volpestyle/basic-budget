@@ -1,0 +1,22 @@
+{
+  "name": "basic-budget",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "infrastructure"
+  ],
+  "scripts": {
+    "dev": "bun run --filter '*' dev",
+    "build": "bun run --filter '*' build",
+    "test": "bun run --filter '*' test",
+    "deploy:dev": "cd infrastructure && cdk deploy --all --profile dev",
+    "deploy:staging": "cd infrastructure && cdk deploy --all --profile staging",
+    "deploy:prod": "cd infrastructure && cdk deploy --all --profile prod"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  }
+}

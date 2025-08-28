@@ -1,202 +1,278 @@
 import { Hono } from 'hono';
-import { setCookie, deleteCookie } from 'hono/cookie';
+import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { AuthService, GoogleOAuth } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
-import { cache } from '@/lib/cache';
+import { GoogleAuthService } from '../services/google-auth';
+import { JWT } from '../lib/jwt';
+import { db, users, sessions } from '../db';
+import { eq, and, gt } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import { strictRateLimit } from '@/middleware/rateLimit';
-import { authMiddleware } from '@/middleware/auth';
-import { googleAuthCallbackSchema, refreshTokenSchema } from '@/validators';
+import { Cache } from '../lib/redis';
+import { HTTPException } from 'hono/http-exception';
+import { auth } from '../middleware/auth';
 
-const auth = new Hono();
+const authRouter = new Hono();
 
-// Apply rate limiting to all auth routes
-auth.use('*', strictRateLimit);
-
-// GET /auth/google - Initiate Google OAuth flow
-auth.get('/google', async (c) => {
-  const state = nanoid(32);
-  
-  // Store state in cache for CSRF protection (5 minutes TTL)
-  await cache.set(`oauth:state:${state}`, true, 300);
-  
-  const authUrl = GoogleOAuth.getAuthUrl(state);
-  
-  return c.json({ authUrl, state });
+// Google OAuth login
+authRouter.get('/google', (c) => {
+  const state = c.req.query('state');
+  const redirectUrl = GoogleAuthService.getAuthUrl(state);
+  return c.redirect(redirectUrl);
 });
 
-// GET /auth/google/callback - Google OAuth callback
-auth.get('/google/callback', 
-  zValidator('query', googleAuthCallbackSchema),
+// Google OAuth callback
+authRouter.get('/google/callback', 
+  zValidator('query', z.object({
+    code: z.string(),
+    state: z.string().optional(),
+  })),
   async (c) => {
-    const { code, state } = c.req.valid('query');
-    
-    // Verify state for CSRF protection
-    const validState = await cache.get(`oauth:state:${state}`);
-    if (!validState) {
-      return c.json({ error: 'Invalid state parameter' }, 400);
-    }
-    
-    // Clean up state
-    await cache.del(`oauth:state:${state}`);
+    const { code } = c.req.valid('query');
     
     try {
-      // Exchange code for tokens
-      const { access_token, refresh_token } = await GoogleOAuth.exchangeCode(code);
+      // Exchange code for user info
+      const googleUser = await GoogleAuthService.exchangeCode(code);
       
-      // Get user info
-      const googleUser = await GoogleOAuth.getUserInfo(access_token);
-      
-      // Create or update user
-      const user = await prisma.user.upsert({
-        where: { googleId: googleUser.id },
-        create: {
-          email: googleUser.email,
-          googleId: googleUser.id,
-          name: googleUser.name,
-          picture: googleUser.picture,
-          refreshToken: refresh_token,
-        },
-        update: {
-          email: googleUser.email,
-          name: googleUser.name,
-          picture: googleUser.picture,
-          refreshToken: refresh_token || undefined,
-        },
-      });
+      // Find or create user
+      const user = await GoogleAuthService.findOrCreateUser(googleUser);
       
       // Generate tokens
-      const [accessToken, refreshToken, sessionToken] = await Promise.all([
-        AuthService.generateAccessToken(user),
-        AuthService.generateRefreshToken(user.id),
-        AuthService.createSession(user.id),
-      ]);
+      const tokens = await GoogleAuthService.generateTokens(user);
       
-      // Set secure session cookie
-      setCookie(c, 'session', sessionToken, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'Lax',
-        maxAge: 30 * 24 * 60 * 60, // 30 days
-        path: '/',
+      // Return tokens (in production, redirect with tokens or set cookies)
+      return c.json({
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          avatarUrl: user.avatarUrl,
+        },
+        ...tokens,
       });
+    } catch (error) {
+      throw new HTTPException(400, { 
+        message: 'Failed to authenticate with Google' 
+      });
+    }
+  }
+);
+
+// Direct Google ID token login (for mobile/web clients)
+authRouter.post('/google/verify',
+  zValidator('json', z.object({
+    idToken: z.string(),
+  })),
+  async (c) => {
+    const { idToken } = c.req.valid('json');
+    
+    try {
+      // Verify ID token
+      const googleUser = await GoogleAuthService.verifyIdToken(idToken);
       
-      // Invalidate user cache
-      await cache.invalidatePattern(`user:${user.id}:*`);
+      // Find or create user
+      const user = await GoogleAuthService.findOrCreateUser(googleUser);
+      
+      // Generate tokens
+      const tokens = await GoogleAuthService.generateTokens(user);
       
       return c.json({
         user: {
           id: user.id,
           email: user.email,
           name: user.name,
-          picture: user.picture,
+          avatarUrl: user.avatarUrl,
         },
-        accessToken,
-        refreshToken,
+        ...tokens,
       });
     } catch (error) {
-      console.error('Google OAuth error:', error);
-      return c.json({ error: 'Authentication failed' }, 500);
+      throw new HTTPException(400, { 
+        message: 'Invalid Google ID token' 
+      });
     }
   }
 );
 
-// POST /auth/refresh - Refresh access token
-auth.post('/refresh',
-  zValidator('json', refreshTokenSchema),
+// Anonymous login
+authRouter.post('/anonymous', async (c) => {
+  const sessionId = nanoid(32);
+  
+  // Create anonymous user
+  const [user] = await db
+    .insert(users)
+    .values({
+      provider: 'anonymous',
+      isAnonymous: true,
+      anonymousSessionId: sessionId,
+      status: 'active',
+      lastLoginAt: new Date(),
+    })
+    .returning();
+  
+  if (!user) {
+    throw new HTTPException(500, { message: 'Failed to create anonymous user' });
+  }
+  
+  // Generate tokens
+  const tokens = await JWT.generateTokenPair(
+    {
+      sub: user.id,
+      provider: 'anonymous',
+      isAnonymous: true,
+      sessionId,
+    },
+    sessionId
+  );
+  
+  // Create session
+  await db.insert(sessions).values({
+    userId: user.id,
+    refreshToken: tokens.refreshToken,
+    userAgent: c.req.header('user-agent'),
+    ipAddress: c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip'),
+    expiresAt: new Date(Date.now() + tokens.refreshExpiresIn * 1000),
+  });
+  
+  return c.json({
+    user: {
+      id: user.id,
+      isAnonymous: true,
+    },
+    ...tokens,
+  });
+});
+
+// Refresh token
+authRouter.post('/refresh',
+  zValidator('json', z.object({
+    refreshToken: z.string(),
+  })),
   async (c) => {
     const { refreshToken } = c.req.valid('json');
     
     try {
-      const payload = await AuthService.verifyRefreshToken(refreshToken);
+      // Verify refresh token
+      const payload = await JWT.verifyToken<{ sub: string; sessionId: string }>(refreshToken);
       
-      const user = await prisma.user.findUnique({
-        where: { id: payload.sub },
-      });
+      // Check session in database
+      const [session] = await db
+        .select()
+        .from(sessions)
+        .where(
+          and(
+            eq(sessions.refreshToken, refreshToken),
+            eq(sessions.userId, payload.sub),
+            gt(sessions.expiresAt, new Date())
+          )
+        )
+        .limit(1);
       
-      if (!user) {
-        return c.json({ error: 'User not found' }, 404);
+      if (!session) {
+        throw new HTTPException(401, { message: 'Invalid refresh token' });
       }
       
-      const accessToken = await AuthService.generateAccessToken(user);
+      // Get user
+      const [user] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, payload.sub))
+        .limit(1);
       
-      return c.json({ accessToken });
+      if (!user || user.status !== 'active') {
+        throw new HTTPException(401, { message: 'User not found or inactive' });
+      }
+      
+      // Generate new access token
+      const accessToken = await JWT.generateAccessToken({
+        sub: user.id,
+        email: user.email ?? undefined,
+        name: user.name ?? undefined,
+        provider: user.provider,
+        isAnonymous: user.isAnonymous,
+        sessionId: payload.sessionId,
+      });
+      
+      // Update session activity
+      await db
+        .update(sessions)
+        .set({ updatedAt: new Date() })
+        .where(eq(sessions.id, session.id));
+      
+      return c.json({
+        accessToken,
+        refreshToken, // Return same refresh token
+        expiresIn: 7 * 24 * 60 * 60, // 7 days
+      });
     } catch (error) {
-      return c.json({ error: 'Invalid refresh token' }, 401);
+      if (error instanceof HTTPException) {
+        throw error;
+      }
+      throw new HTTPException(401, { message: 'Invalid refresh token' });
     }
   }
 );
 
-// POST /auth/logout - Logout user
-auth.post('/logout', authMiddleware, async (c) => {
+// Logout
+authRouter.post('/logout', auth, async (c) => {
   const user = c.get('user');
-  const sessionCookie = c.req.header('Cookie')?.match(/session=([^;]+)/)?.[1];
+  const refreshToken = c.req.header('X-Refresh-Token');
   
-  // Revoke session
-  if (sessionCookie) {
-    await AuthService.revokeSession(sessionCookie);
+  // Delete session
+  if (refreshToken) {
+    await db
+      .delete(sessions)
+      .where(
+        and(
+          eq(sessions.refreshToken, refreshToken),
+          eq(sessions.userId, user.id)
+        )
+      );
   }
   
-  // Blacklist current access token
-  const authHeader = c.req.header('Authorization');
-  if (authHeader?.startsWith('Bearer ')) {
-    const token = authHeader.substring(7);
-    await AuthService.blacklistToken(token);
-  }
+  // Clear cache
+  await Cache.delete(`user:${user.id}`);
   
-  // Clear session cookie
-  deleteCookie(c, 'session');
-  
-  // Clear user cache
-  if (user) {
-    await cache.invalidatePattern(`user:${user.id}:*`);
-  }
-  
-  return c.json({ success: true });
+  return c.json({ message: 'Logged out successfully' });
 });
 
-// GET /auth/me - Get current user
-auth.get('/me', authMiddleware, async (c) => {
+// Logout all sessions
+authRouter.post('/logout-all', auth, async (c) => {
   const user = c.get('user');
   
-  if (!user) {
-    return c.json({ error: 'Not authenticated' }, 401);
+  // Delete all sessions for user
+  await db
+    .delete(sessions)
+    .where(eq(sessions.userId, user.id));
+  
+  // Clear cache
+  await Cache.delete(`user:${user.id}`);
+  
+  return c.json({ message: 'All sessions logged out successfully' });
+});
+
+// Get current user
+authRouter.get('/me', auth, async (c) => {
+  const user = c.get('user');
+  
+  // Get full user data
+  const [fullUser] = await db
+    .select()
+    .from(users)
+    .where(eq(users.id, user.id))
+    .limit(1);
+  
+  if (!fullUser) {
+    throw new HTTPException(404, { message: 'User not found' });
   }
   
   return c.json({
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    picture: user.picture,
+    id: fullUser.id,
+    email: fullUser.email,
+    name: fullUser.name,
+    avatarUrl: fullUser.avatarUrl,
+    provider: fullUser.provider,
+    isAnonymous: fullUser.isAnonymous,
+    createdAt: fullUser.createdAt,
+    lastLoginAt: fullUser.lastLoginAt,
   });
 });
 
-// DELETE /auth/account - Delete user account
-auth.delete('/account', authMiddleware, async (c) => {
-  const user = c.get('user');
-  
-  if (!user) {
-    return c.json({ error: 'Not authenticated' }, 401);
-  }
-  
-  try {
-    // Delete user and all associated data (cascade)
-    await prisma.user.delete({
-      where: { id: user.id },
-    });
-    
-    // Clear all caches
-    await cache.invalidatePattern(`*:${user.id}:*`);
-    
-    // Clear session cookie
-    deleteCookie(c, 'session');
-    
-    return c.json({ success: true });
-  } catch (error) {
-    console.error('Account deletion error:', error);
-    return c.json({ error: 'Failed to delete account' }, 500);
-  }
-});
-
-export default auth;
+export { authRouter };

@@ -1,35 +1,43 @@
 {
   "name": "@basic-budget/api",
   "version": "1.0.0",
+  "module": "src/index.ts",
   "type": "module",
+  "private": true,
   "scripts": {
     "dev": "bun run --watch src/index.ts",
-    "build": "bun build src/index.ts --target=node --outdir=dist",
-    "start": "bun run dist/index.js",
-    "db:generate": "prisma generate",
-    "db:push": "prisma db push",
-    "db:migrate": "prisma migrate dev",
-    "db:migrate:prod": "prisma migrate deploy",
-    "type-check": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@hono/node-server": "^1.12.0",
-    "@prisma/client": "^5.18.0",
-    "hono": "^4.5.8",
-    "@hono/jwt": "^1.0.0",
-    "@hono/cors": "^1.0.0",
-    "@hono/zod-validator": "^0.2.2",
-    "plaid": "^23.0.0",
-    "zod": "^3.23.8",
-    "argon2": "^0.31.2",
-    "nanoid": "^5.0.7",
-    "@aws-sdk/client-s3": "^3.621.0",
-    "@aws-sdk/s3-request-presigner": "^3.621.0",
-    "redis": "^4.6.15"
+    "start": "bun run src/index.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun run src/db/migrate.ts",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "prisma": "^5.18.0",
-    "typescript": "^5.5.4"
+    "@types/node": "^24.3.0",
+    "drizzle-kit": "^0.31.4",
+    "tsx": "^4.20.5"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.876.0",
+    "@aws-sdk/lib-storage": "^3.876.0",
+    "@hono/zod-validator": "^0.7.2",
+    "@paralleldrive/cuid2": "^2.2.2",
+    "bullmq": "^5.58.2",
+    "dotenv": "^17.2.1",
+    "drizzle-orm": "^0.44.5",
+    "google-auth-library": "^10.3.0",
+    "hono": "^4.9.4",
+    "ioredis": "^5.7.0",
+    "jose": "^6.1.0",
+    "nanoid": "^5.1.5",
+    "plaid": "^38.0.0",
+    "postgres": "^3.4.7",
+    "sharp": "^0.34.3",
+    "zod": "^4.1.4"
   }
 }

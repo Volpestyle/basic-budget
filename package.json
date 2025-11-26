@@ -5,11 +5,18 @@
   "type": "module",
   "scripts": {
     "dev": "turbo run dev",
-    "build": "turbo run build",
+    "dev:web": "turbo run dev --filter=@basic-budget/web",
+    "build": "turbo run build && pnpm build:api",
+    "build:web": "turbo run build --filter=@basic-budget/web",
+    "build:api": "cd apps/api && make build",
+    "build:infra": "turbo run build --filter=@basic-budget/infra",
     "lint": "turbo run lint",
+    "lint:api": "cd apps/api && make lint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "turbo run typecheck"
+    "typecheck": "turbo run typecheck",
+    "deploy": "cd infra && pnpm cdk deploy --all",
+    "deploy:diff": "cd infra && pnpm cdk diff"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",

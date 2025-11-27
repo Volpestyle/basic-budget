@@ -80,8 +80,11 @@
     { value: 'transfer', label: 'Transfer' }
   ]
 
-  const filteredTransactions = $derived(() => {
-    let transactions = $transactionsStore.items
+  // Extract store items to derived value first (avoids issues with store subscriptions inside $derived.by)
+  const transactionItems = $derived($transactionsStore.items)
+
+  const filteredTransactions = $derived.by(() => {
+    let transactions = transactionItems
 
     if (searchQuery) {
       const query = searchQuery.toLowerCase()
@@ -103,9 +106,9 @@
     return transactions
   })
 
-  const groupedTransactions = $derived(() => {
+  const groupedTransactions = $derived.by(() => {
     const grouped: Record<string, Transaction[]> = {}
-    for (const tx of filteredTransactions()) {
+    for (const tx of filteredTransactions) {
       if (!grouped[tx.date]) {
         grouped[tx.date] = []
       }
@@ -154,14 +157,14 @@
     <div class="flex items-center justify-center py-20">
       <Spinner size="lg" />
     </div>
-  {:else if groupedTransactions().length === 0}
+  {:else if groupedTransactions.length === 0}
     <div class="text-center py-20">
       <p class="text-gray-400 mb-4">No transactions found</p>
       <Button variant="primary" onclick={openNewModal}>Add your first transaction</Button>
     </div>
   {:else}
     <div class="space-y-6">
-      {#each groupedTransactions() as [date, transactions]}
+      {#each groupedTransactions as [date, transactions]}
         <div>
           <h3 class="text-sm font-medium text-gray-400 mb-3">
             {new Date(date).toLocaleDateString('en-US', {

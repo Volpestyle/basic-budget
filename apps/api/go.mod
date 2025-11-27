@@ -11,6 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.34.7
 	github.com/awslabs/aws-lambda-go-api-proxy v0.16.2
 	github.com/go-chi/chi/v5 v5.1.0
+	github.com/go-chi/cors v1.2.2
 	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/google/uuid v1.6.0
 )

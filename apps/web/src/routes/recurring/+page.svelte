@@ -5,6 +5,7 @@
   import Card from '$components/Card.svelte'
   import Button from '$components/Button.svelte'
   import Input from '$components/Input.svelte'
+  import DatePicker from '$components/DatePicker.svelte'
   import Select from '$components/Select.svelte'
   import Modal from '$components/Modal.svelte'
   import CategoryTag from '$components/CategoryTag.svelte'
@@ -312,7 +313,7 @@
       <Select label="Day of Month" options={dayOptions} bind:value={dayOfMonth} />
     {/if}
 
-    <Input label="Start Date" type="date" bind:value={startDate} />
+    <DatePicker label="Start Date" bind:value={startDate} />
   </form>
 
   {#snippet footer()}

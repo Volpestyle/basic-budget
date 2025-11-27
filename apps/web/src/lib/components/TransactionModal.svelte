@@ -3,6 +3,7 @@
   import Modal from './Modal.svelte'
   import Button from './Button.svelte'
   import Input from './Input.svelte'
+  import DatePicker from './DatePicker.svelte'
   import Select from './Select.svelte'
   import { activeCategories, incomeStreamsStore } from '$stores'
 
@@ -129,7 +130,7 @@
       bind:value={amount}
     />
 
-    <Input label="Date" type="date" bind:value={date} />
+    <DatePicker label="Date" bind:value={date} />
 
     <Input label="Description" placeholder="What was this for?" bind:value={description} />
 

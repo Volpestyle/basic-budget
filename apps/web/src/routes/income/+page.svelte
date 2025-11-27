@@ -5,6 +5,7 @@
   import Card from '$components/Card.svelte'
   import Button from '$components/Button.svelte'
   import Input from '$components/Input.svelte'
+  import DatePicker from '$components/DatePicker.svelte'
   import Select from '$components/Select.svelte'
   import Modal from '$components/Modal.svelte'
   import AmountDisplay from '$components/AmountDisplay.svelte'
@@ -22,6 +23,8 @@
   let categoryId = $state('')
   let period = $state<'monthly' | 'biweekly' | 'once'>('monthly')
   let expectedAmount = $state('')
+  let startDate = $state(new Date().toISOString().split('T')[0])
+  let endDate = $state('')
 
   onMount(() => {
     loadData()
@@ -37,6 +40,8 @@
     categoryId = ''
     period = 'monthly'
     expectedAmount = ''
+    startDate = new Date().toISOString().split('T')[0]
+    endDate = ''
     error = null
     showModal = true
   }
@@ -47,6 +52,8 @@
     categoryId = stream.default_category_id
     period = stream.period
     expectedAmount = (stream.expected_amount_cents / 100).toString()
+    startDate = stream.start_date || new Date().toISOString().split('T')[0]
+    endDate = stream.end_date ?? ''
     error = null
     showModal = true
   }
@@ -54,7 +61,7 @@
   async function handleSave() {
     error = null
 
-    if (!name || !categoryId || !expectedAmount) {
+    if (!name || !categoryId || !expectedAmount || !startDate) {
       error = 'Please fill in all required fields'
       return
     }
@@ -72,7 +79,9 @@
         name,
         default_category_id: categoryId,
         period,
-        expected_amount_cents: amountCents
+        expected_amount_cents: amountCents,
+        start_date: startDate,
+        end_date: endDate || undefined
       }
 
       if (editingStream) {
@@ -211,6 +220,11 @@
     <Select label="Category" options={categoryOptions} placeholder="Select a category" bind:value={categoryId} />
 
     <Select label="Payment Period" options={periodOptions} bind:value={period} />
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <DatePicker label="Start Date" bind:value={startDate} />
+      <DatePicker label="End Date (optional)" bind:value={endDate} />
+    </div>
 
     <Input label="Expected Amount" type="number" step="0.01" min="0" placeholder="0.00" bind:value={expectedAmount} />
   </form>

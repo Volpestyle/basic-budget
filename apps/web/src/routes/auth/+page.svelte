@@ -59,28 +59,28 @@
   <title>Sign In - Basic Budget</title>
 </svelte:head>
 
-<div class="min-h-screen flex flex-col items-center justify-center p-4">
-  <div class="w-full max-w-md">
+<div class="min-h-screen flex flex-col items-center justify-center p-5">
+  <div class="w-full max-w-sm">
     <!-- Logo and tagline -->
-    <div class="text-center mb-12">
-      <h1 class="text-4xl font-bold text-gradient mb-4">Basic Budget</h1>
-      <p class="text-xl text-gray-400">Stay on top of your month.</p>
+    <div class="text-center mb-10">
+      <h1 class="text-2xl font-display font-bold text-ink-900 dark:text-white mb-2">basic budget</h1>
+      <p class="text-sm text-ink-900/60 dark:text-white/60">Stay on top of your month.</p>
     </div>
 
     <!-- Sign in card -->
-    <div class="glass rounded-2xl p-8">
-      <h2 class="text-2xl font-semibold text-white text-center mb-6">Welcome</h2>
+    <div class="bg-cream-50 dark:bg-ink-800 border border-ink-900/5 dark:border-white/5 rounded-lg p-6">
+      <h2 class="text-base font-display font-bold text-ink-900 dark:text-white text-center mb-5">Welcome</h2>
 
       {#if error}
-        <div class="mb-6 p-4 rounded-lg bg-red-500/10 border border-red-500/20">
-          <p class="text-sm text-red-400">{error}</p>
+        <div class="mb-5 p-3 bg-negative/10 border border-negative/20">
+          <p class="text-xs text-negative">{error}</p>
         </div>
       {/if}
 
       <Button
         variant="ghost"
         size="lg"
-        class="w-full justify-center gap-3 border-white/20 hover:border-white/40"
+        class="w-full justify-center gap-2"
         onclick={handleGoogleSignIn}
         disabled={loading}
       >
@@ -88,7 +88,7 @@
           <Spinner size="sm" />
           <span>Signing in...</span>
         {:else}
-          <svg class="w-5 h-5" viewBox="0 0 24 24">
+          <svg class="w-4 h-4" viewBox="0 0 24 24">
             <path
               fill="currentColor"
               d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -110,45 +110,45 @@
         {/if}
       </Button>
 
-      <p class="mt-6 text-center text-sm text-gray-500">
+      <p class="mt-5 text-center text-[10px] text-ink-900/40 dark:text-white/40">
         By signing in, you agree to our terms of service and privacy policy.
       </p>
     </div>
 
     <!-- Features -->
-    <div class="mt-12 grid grid-cols-2 gap-4 text-center">
-      <div class="p-4">
-        <div class="text-primary-400 mb-2">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+    <div class="mt-10 grid grid-cols-2 gap-3 text-center">
+      <div class="p-3">
+        <div class="text-ink-900/40 dark:text-white/40 mb-1.5">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
           </svg>
         </div>
-        <p class="text-sm text-gray-400">Track spending</p>
+        <p class="text-xs text-ink-900/60 dark:text-white/60">Track spending</p>
       </div>
-      <div class="p-4">
-        <div class="text-primary-400 mb-2">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <div class="p-3">
+        <div class="text-ink-900/40 dark:text-white/40 mb-1.5">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" />
             <path stroke-linecap="round" stroke-linejoin="round" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" />
           </svg>
         </div>
-        <p class="text-sm text-gray-400">Budget by category</p>
+        <p class="text-xs text-ink-900/60 dark:text-white/60">Budget by category</p>
       </div>
-      <div class="p-4">
-        <div class="text-primary-400 mb-2">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <div class="p-3">
+        <div class="text-ink-900/40 dark:text-white/40 mb-1.5">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
         </div>
-        <p class="text-sm text-gray-400">Recurring payments</p>
+        <p class="text-xs text-ink-900/60 dark:text-white/60">Recurring payments</p>
       </div>
-      <div class="p-4">
-        <div class="text-primary-400 mb-2">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+      <div class="p-3">
+        <div class="text-ink-900/40 dark:text-white/40 mb-1.5">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
           </svg>
         </div>
-        <p class="text-sm text-gray-400">Works offline</p>
+        <p class="text-xs text-ink-900/60 dark:text-white/60">Works offline</p>
       </div>
     </div>
   </div>

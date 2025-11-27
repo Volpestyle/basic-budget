@@ -1,10 +1,12 @@
-import { writable, derived } from 'svelte/store'
+import { get, writable, derived } from 'svelte/store'
 import type {
   IncomeStream,
   CreateIncomeStreamRequest,
   UpdateIncomeStreamRequest
 } from '@basic-budget/types'
 import { incomeStreamsApi } from '$api'
+import { summaryStore } from './summary'
+import { currentMonthStore } from './currentMonth'
 
 interface IncomeStreamsState {
   items: IncomeStream[]
@@ -18,6 +20,14 @@ function createIncomeStreamsStore() {
     loading: false,
     error: null
   })
+
+  const refreshSummary = async () => {
+    try {
+      await summaryStore.loadMonth(get(currentMonthStore))
+    } catch {
+      // Ignore summary refresh errors; UI will surface summaryStore.error
+    }
+  }
 
   return {
     subscribe,
@@ -45,6 +55,7 @@ function createIncomeStreamsStore() {
           items: [...state.items, stream],
           loading: false
         }))
+        void refreshSummary()
         return stream
       } catch (err) {
         update((state) => ({
@@ -65,6 +76,7 @@ function createIncomeStreamsStore() {
           items: state.items.map((s) => (s.id === id ? updated : s)),
           loading: false
         }))
+        void refreshSummary()
         return updated
       } catch (err) {
         update((state) => ({
@@ -85,6 +97,7 @@ function createIncomeStreamsStore() {
           items: state.items.filter((s) => s.id !== id),
           loading: false
         }))
+        void refreshSummary()
       } catch (err) {
         update((state) => ({
           ...state,

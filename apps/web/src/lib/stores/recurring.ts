@@ -1,10 +1,12 @@
-import { writable, derived } from 'svelte/store'
+import { get, writable, derived } from 'svelte/store'
 import type {
   RecurringRule,
   CreateRecurringRuleRequest,
   UpdateRecurringRuleRequest
 } from '@basic-budget/types'
 import { recurringApi } from '$api'
+import { summaryStore } from './summary'
+import { currentMonthStore } from './currentMonth'
 
 interface RecurringState {
   items: RecurringRule[]
@@ -18,6 +20,14 @@ function createRecurringStore() {
     loading: false,
     error: null
   })
+
+  const refreshSummary = async () => {
+    try {
+      await summaryStore.loadMonth(get(currentMonthStore))
+    } catch {
+      // ignore summary refresh errors; summaryStore.error will surface if needed
+    }
+  }
 
   return {
     subscribe,
@@ -45,6 +55,7 @@ function createRecurringStore() {
           items: [...state.items, rule],
           loading: false
         }))
+        void refreshSummary()
         return rule
       } catch (err) {
         update((state) => ({
@@ -65,6 +76,7 @@ function createRecurringStore() {
           items: state.items.map((r) => (r.id === id ? updated : r)),
           loading: false
         }))
+        void refreshSummary()
         return updated
       } catch (err) {
         update((state) => ({
@@ -85,6 +97,7 @@ function createRecurringStore() {
           items: state.items.filter((r) => r.id !== id),
           loading: false
         }))
+        void refreshSummary()
       } catch (err) {
         update((state) => ({
           ...state,

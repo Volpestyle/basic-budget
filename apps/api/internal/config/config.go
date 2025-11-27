@@ -6,7 +6,8 @@ import (
 )
 
 type Config struct {
-	// DynamoDB table names
+	// DynamoDB
+	DynamoDBEndpoint    string
 	UsersTable          string
 	CategoriesTable     string
 	MonthBudgetsTable   string
@@ -25,6 +26,7 @@ type Config struct {
 
 func Load() *Config {
 	return &Config{
+		DynamoDBEndpoint:    getEnv("DYNAMODB_ENDPOINT", ""),
 		UsersTable:          getEnv("USERS_TABLE", "basic-budget-users"),
 		CategoriesTable:     getEnv("CATEGORIES_TABLE", "basic-budget-categories"),
 		MonthBudgetsTable:   getEnv("MONTH_BUDGETS_TABLE", "basic-budget-month-budgets"),

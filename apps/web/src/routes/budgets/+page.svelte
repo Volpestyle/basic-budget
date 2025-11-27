@@ -7,6 +7,7 @@
   import ProgressBar from '$components/ProgressBar.svelte'
   import AmountDisplay from '$components/AmountDisplay.svelte'
   import Spinner from '$components/Spinner.svelte'
+  import BudgetSlider from '$components/BudgetSlider.svelte'
   import {
     currentMonthStore,
     budgetsStore,
@@ -18,7 +19,9 @@
 
   let editing = $state(false)
   let saving = $state(false)
-  let budgetAmounts = $state<Record<string, string>>({})
+  let budgetPercentages = $state<Record<string, number>>({})
+  let budgetError = $state<string | null>(null)
+  let prefilled = $state(false)
 
   onMount(() => {
     loadData()
@@ -37,46 +40,83 @@
       summaryStore.loadMonth($currentMonthStore)
     ])
 
-    // Initialize budget amounts from current budgets
-    const amounts: Record<string, string> = {}
-    for (const budget of $budgetsStore.items) {
-      amounts[budget.category_id] = (budget.planned_amount_cents / 100).toString()
-    }
-    budgetAmounts = amounts
+    initPercentages()
   }
 
+  function initPercentages() {
+    const incomeCents = $summaryStore.monthly?.income_total_cents ?? 0
+    if (incomeCents <= 0) return
+
+    const percentages: Record<string, number> = {}
+    for (const budget of $budgetsStore.items) {
+      percentages[budget.category_id] = (budget.planned_amount_cents / incomeCents) * 100
+    }
+    budgetPercentages = percentages
+  }
+
+  // Prefill once when we have data and no budgets saved
+  $effect(() => {
+    if (
+      prefilled ||
+      $budgetsStore.loading ||
+      $categoriesStore.loading ||
+      $budgetsStore.items.length > 0 ||
+      $expenseCategories.length === 0 ||
+      (summary?.income_total_cents ?? 0) <= 0
+    ) {
+      return
+    }
+
+    const perCategory = 100 / $expenseCategories.length
+    const defaults: Record<string, number> = {}
+    $expenseCategories.forEach((cat) => {
+      defaults[cat.id] = Math.round(perCategory * 10) / 10
+    })
+    budgetPercentages = defaults
+    prefilled = true
+  })
+
   function startEditing() {
-    // Initialize all categories with their current budget or 0
-    const amounts: Record<string, string> = {}
+    const incomeCents = summary?.income_total_cents ?? 0
+    const percentages: Record<string, number> = {}
     for (const cat of $expenseCategories) {
       const budget = $budgetsByCategoryId[cat.id]
-      amounts[cat.id] = budget ? (budget.planned_amount_cents / 100).toString() : '0'
+      if (budget && incomeCents > 0) {
+        percentages[cat.id] = (budget.planned_amount_cents / incomeCents) * 100
+      } else {
+        percentages[cat.id] = 0
+      }
     }
-    budgetAmounts = amounts
+    budgetPercentages = percentages
     editing = true
   }
 
   function cancelEditing() {
     editing = false
-    // Reset to original values
-    const amounts: Record<string, string> = {}
-    for (const budget of $budgetsStore.items) {
-      amounts[budget.category_id] = (budget.planned_amount_cents / 100).toString()
-    }
-    budgetAmounts = amounts
+    initPercentages()
   }
 
   async function saveBudgets() {
+    budgetError = null
     saving = true
 
     try {
+      const incomeCents = summary?.income_total_cents ?? 0
       const budgets: BulkBudgetRequest['budgets'] = []
 
-      for (const [categoryId, amount] of Object.entries(budgetAmounts)) {
-        const amountCents = Math.round(parseFloat(amount || '0') * 100)
+      for (const [categoryId, percentage] of Object.entries(budgetPercentages)) {
+        const amountCents = Math.round((percentage / 100) * incomeCents)
         if (amountCents > 0) {
           budgets.push({ category_id: categoryId, planned_amount_cents: amountCents })
         }
+      }
+
+      const totalPercentage = Object.values(budgetPercentages).reduce((sum, p) => sum + p, 0)
+
+      if (totalPercentage > 100) {
+        budgetError = `Total allocation (${totalPercentage.toFixed(1)}%) cannot exceed 100%.`
+        saving = false
+        return
       }
 
       await budgetsStore.bulkUpsert($currentMonthStore, { budgets })
@@ -94,8 +134,16 @@
     summary?.category_breakdown ?? []
   )
 
+  const totalAllocatedPercentage = $derived(
+    Object.values(budgetPercentages).reduce((sum, p) => sum + p, 0)
+  )
+
+  const plannedBudgetsTotal = $derived(
+    Math.round((totalAllocatedPercentage / 100) * (summary?.income_total_cents ?? 0))
+  )
+
   const totalBudget = $derived(
-    Object.values(budgetAmounts).reduce((sum, val) => sum + (parseFloat(val || '0') * 100), 0)
+    (summary?.income_total_cents ?? 0) || plannedBudgetsTotal
   )
 
   const totalSpent = $derived(
@@ -129,6 +177,37 @@
       <Spinner size="lg" />
     </div>
   {:else}
+    {#if budgetError}
+      <div class="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-sm text-red-400">
+        {budgetError}
+      </div>
+    {/if}
+
+    {#if editing}
+      <!-- Total allocation indicator -->
+      <Card variant="default" padding="md">
+        <div class="flex items-center justify-between">
+          <span class="text-sm text-gray-400">Total Allocated</span>
+          <span class="text-lg font-semibold {totalAllocatedPercentage > 100 ? 'text-red-400' : 'text-white'}">
+            {totalAllocatedPercentage.toFixed(1)}%
+          </span>
+        </div>
+        <div class="mt-2 h-2 rounded-full bg-surface-800 overflow-hidden">
+          <div
+            class="h-full transition-all duration-150 {totalAllocatedPercentage > 100 ? 'bg-red-500' : 'bg-primary-500'}"
+            style="width: {Math.min(totalAllocatedPercentage, 100)}%;"
+          ></div>
+        </div>
+        <p class="mt-2 text-xs text-gray-500">
+          {#if totalAllocatedPercentage > 100}
+            Over by {(totalAllocatedPercentage - 100).toFixed(1)}%
+          {:else}
+            {(100 - totalAllocatedPercentage).toFixed(1)}% unallocated
+          {/if}
+        </p>
+      </Card>
+    {/if}
+
     <!-- Summary -->
     <Card variant="glass" padding="lg">
       <div class="flex items-center justify-between">
@@ -175,22 +254,24 @@
             </div>
 
             {#if editing}
-              <div class="flex items-center gap-2">
-                <span class="text-gray-400">$</span>
-                <input
-                  type="number"
-                  step="1"
-                  min="0"
-                  class="flex-1 px-3 py-2 bg-surface-800 border border-white/10 rounded-lg text-white font-mono
-                         focus:outline-none focus:ring-2 focus:ring-primary-500/50"
-                  bind:value={budgetAmounts[category.id]}
-                />
-              </div>
+              <BudgetSlider
+                percentage={budgetPercentages[category.id] ?? 0}
+                totalCents={summary?.income_total_cents ?? 0}
+                color={category.color}
+                onchange={(p) => budgetPercentages[category.id] = p}
+              />
             {:else}
               <div class="space-y-3">
                 <div class="flex items-baseline justify-between">
                   <span class="text-sm text-gray-400">Budget</span>
-                  <AmountDisplay cents={planned} size="md" />
+                  <div class="text-right">
+                    <AmountDisplay cents={planned} size="md" />
+                    {#if summary?.income_total_cents}
+                      <div class="text-[11px] text-gray-500">
+                        {Math.round((planned / summary.income_total_cents) * 10000) / 100}%
+                      </div>
+                    {/if}
+                  </div>
                 </div>
                 <ProgressBar value={spent} max={planned} color={category.color} />
                 <div class="flex items-center justify-between text-sm">

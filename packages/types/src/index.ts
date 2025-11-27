@@ -68,6 +68,8 @@ export interface IncomeStream {
   default_category_id: string
   period: IncomePeriod
   expected_amount_cents: number
+  start_date: string
+  end_date?: string | null
   active: boolean
   created_at: string
 }
@@ -77,6 +79,8 @@ export interface CreateIncomeStreamRequest {
   default_category_id: string
   period: IncomePeriod
   expected_amount_cents: number
+  start_date: string
+  end_date?: string | null
 }
 
 export interface UpdateIncomeStreamRequest {
@@ -84,6 +88,8 @@ export interface UpdateIncomeStreamRequest {
   default_category_id?: string
   period?: IncomePeriod
   expected_amount_cents?: number
+  start_date?: string
+  end_date?: string | null
   active?: boolean
 }
 

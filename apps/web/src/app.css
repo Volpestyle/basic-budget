@@ -1,39 +1,165 @@
+/* Space Mono from Google Fonts - loaded via preconnect in app.html */
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* Departure Mono font */
+@font-face {
+  font-family: 'Departure Mono';
+  src:
+    url('/fonts/DepartureMono-1.500/DepartureMono-Regular.woff2') format('woff2'),
+    url('/fonts/DepartureMono-1.500/DepartureMono-Regular.woff') format('woff');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 @layer base {
   * {
+    @apply border-ink-900/10;
+  }
+  .dark * {
     @apply border-white/10;
   }
 
+  html {
+    @apply font-mono antialiased;
+  }
+
+  /* Light mode (default) */
   body {
-    @apply bg-background text-white;
+    @apply bg-cream-100 text-ink-900;
   }
 
+  /* Dark mode */
+  .dark body {
+    @apply bg-ink-900 text-white;
+  }
+
+  /* Page transition wrapper */
+  .page-content {
+    /* Apply page transition animations via GSAP in JS */
+    /* This class is just a hook for the animation system */
+  }
+
+  /* Selection */
+  ::selection {
+    @apply bg-ink-900/10;
+  }
+  .dark ::selection {
+    @apply bg-white/20;
+  }
+
+  /* Scrollbar - Light mode */
   ::-webkit-scrollbar {
-    @apply w-2;
+    @apply w-1.5;
   }
-
   ::-webkit-scrollbar-track {
-    @apply bg-background;
+    @apply bg-transparent;
   }
-
   ::-webkit-scrollbar-thumb {
-    @apply bg-white/20 rounded-full;
+    @apply bg-ink-900/20 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-ink-900/30;
   }
 
-  ::-webkit-scrollbar-thumb:hover {
+  /* Scrollbar - Dark mode */
+  .dark ::-webkit-scrollbar-thumb {
+    @apply bg-white/20;
+  }
+  .dark ::-webkit-scrollbar-thumb:hover {
     @apply bg-white/30;
+  }
+
+  /* Focus styles */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ink-900/20 ring-offset-2 ring-offset-cream-100;
+  }
+  .dark :focus-visible {
+    @apply ring-white/30 ring-offset-ink-900;
   }
 }
 
 @layer components {
-  .glass {
-    @apply bg-white/5 backdrop-blur-lg border border-white/10 rounded-xl;
+  /* Card component */
+  .card {
+    @apply bg-cream-50 border border-ink-900/5 rounded-lg;
+  }
+  .dark .card {
+    @apply bg-ink-800 border-white/5;
   }
 
-  .text-gradient {
-    @apply bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent;
+  /* Header display font */
+  .font-heading {
+    @apply font-display font-bold tracking-tight;
+  }
+
+  /* Subtle divider */
+  .divider {
+    @apply border-t border-ink-900/10;
+  }
+  .dark .divider {
+    @apply border-white/10;
+  }
+
+  /* Interactive hover states */
+  .interactive {
+    @apply transition-colors duration-150;
+  }
+  .interactive:hover {
+    @apply bg-ink-900/5;
+  }
+  .dark .interactive:hover {
+    @apply bg-white/5;
+  }
+
+  /* Amount colors */
+  .amount-positive {
+    @apply text-positive;
+  }
+  .amount-negative {
+    @apply text-negative;
+  }
+
+  /* Accent pill */
+  .accent-pill {
+    @apply px-2 py-0.5 rounded text-xs;
+  }
+}
+
+@layer utilities {
+  /* Safe area padding for iOS */
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .safe-area-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  /* Liquid UI animation utilities */
+  .will-change-transform {
+    will-change: transform;
+  }
+
+  .will-change-opacity {
+    will-change: opacity;
+  }
+
+  .gpu-accelerated {
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    perspective: 1000px;
+  }
+
+  /* Transition markers for FLIP animations */
+  [data-transition-key] {
+    will-change: transform;
+  }
+
+  [data-transition-stagger] {
+    will-change: transform, opacity;
   }
 }

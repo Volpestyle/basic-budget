@@ -1,43 +1,50 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ['./src/**/*.{html,js,svelte,ts}'],
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {
-        background: {
-          DEFAULT: '#050816',
-          surface: '#0B1020',
+        // Light mode: warm off-white/papyrus
+        cream: {
+          50: '#FDFCFA',
+          100: '#FAF8F5',
+          200: '#F5F1EB',
+          300: '#EDE7DC',
+          400: '#E5DDD0',
+          500: '#DDD3C4',
         },
-        primary: {
-          DEFAULT: '#00F5D4',
-          50: '#E6FFFA',
-          100: '#B3FFF0',
-          200: '#80FFE6',
-          300: '#4DFFDB',
-          400: '#1AFFD1',
-          500: '#00F5D4',
-          600: '#00C4AA',
-          700: '#009380',
-          800: '#006255',
-          900: '#00312B',
+        // Dark mode: pure black
+        ink: {
+          900: '#000000',
+          800: '#0A0A0A',
+          700: '#111111',
         },
-        secondary: {
-          DEFAULT: '#9B5DE5',
-          50: '#F5EDFB',
-          100: '#E6D4F5',
-          200: '#D1B3ED',
-          300: '#BC92E5',
-          400: '#A771DD',
-          500: '#9B5DE5',
-          600: '#7C3FC7',
-          700: '#5D2F95',
-          800: '#3E1F64',
-          900: '#1F1032',
+        // Pastel accents for dark mode
+        accent: {
+          mint: '#A8E6CF',
+          lavender: '#B8B5E4',
+          peach: '#FFD3B6',
+          rose: '#FFAAA5',
+          sky: '#A8D8EA',
         },
+        // Semantic colors
+        positive: '#6BCB77',
+        negative: '#FF6B6B',
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'monospace'],
+        mono: ['"Departure Mono"', 'monospace'],
+        display: ['"Space Mono"', 'monospace'],
+      },
+      fontSize: {
+        'xs': ['0.75rem', { lineHeight: '1.4' }],
+        'sm': ['0.875rem', { lineHeight: '1.5' }],
+        'base': ['1rem', { lineHeight: '1.6' }],
+        'lg': ['1.125rem', { lineHeight: '1.5' }],
+        'xl': ['1.25rem', { lineHeight: '1.4' }],
+        '2xl': ['1.5rem', { lineHeight: '1.3' }],
+        '3xl': ['1.875rem', { lineHeight: '1.2' }],
+        '4xl': ['2.25rem', { lineHeight: '1.1' }],
       },
     },
   },

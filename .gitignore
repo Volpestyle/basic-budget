@@ -11,6 +11,8 @@ build/
 
 # Go
 apps/api/bin/
+apps/api/api
+apps/api/initdb
 *.exe
 *.exe~
 *.dll

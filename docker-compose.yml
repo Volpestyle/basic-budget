@@ -1,0 +1,18 @@
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    container_name: basic-budget-dynamodb
+    user: root # run as root so the named volume is always writable (avoids sqlite permission errors)
+    ports:
+      - "8000:8000"
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath /data"
+    volumes:
+      - dynamodb-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:8000 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  dynamodb-data:

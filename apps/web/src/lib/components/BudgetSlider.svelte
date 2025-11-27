@@ -16,16 +16,21 @@
   let inputEl: HTMLInputElement | undefined = $state()
 
   const amountCents = $derived(Math.round((percentage / 100) * totalCents))
-  const effectiveMax = $derived(Math.min(100, maxPercentage))
-  const isAtMax = $derived(percentage >= effectiveMax && effectiveMax < 100)
+  const effectiveMax = $derived(Math.max(0, Math.min(100, maxPercentage)))
+  const isAtMax = $derived(percentage >= effectiveMax - 0.0001)
+
+  function clampPercentage(value: number) {
+    const clamped = Math.max(0, Math.min(effectiveMax, value))
+    return Math.round(clamped * 10) / 10
+  }
 
   function updateFromPosition(clientX: number) {
     if (!sliderTrack) return
 
     const rect = sliderTrack.getBoundingClientRect()
     const x = clientX - rect.left
-    const newPercentage = Math.max(0, Math.min(effectiveMax, (x / rect.width) * 100))
-    onchange(Math.round(newPercentage * 10) / 10)
+    const newPercentage = clampPercentage((x / rect.width) * 100)
+    onchange(newPercentage)
   }
 
   function handlePointerDown(e: PointerEvent) {
@@ -44,12 +49,12 @@
   }
 
   function increment() {
-    const newVal = Math.min(effectiveMax, percentage + 1)
+    const newVal = clampPercentage(percentage + 0.1)
     onchange(newVal)
   }
 
   function decrement() {
-    const newVal = Math.max(0, percentage - 1)
+    const newVal = clampPercentage(percentage - 0.1)
     onchange(newVal)
   }
 
@@ -63,8 +68,8 @@
   function commitEdit() {
     const parsed = parseFloat(inputValue)
     if (!isNaN(parsed)) {
-      const clamped = Math.max(0, Math.min(effectiveMax, parsed))
-      onchange(Math.round(clamped * 10) / 10)
+      const clamped = clampPercentage(parsed)
+      onchange(clamped)
     }
     isEditing = false
   }

@@ -9,10 +9,12 @@
 
   let { value, max, color, showLabel = false, size = 'md' }: Props = $props()
 
-  const percentage = max > 0 ? Math.min((value / max) * 100, 100) : 0
-  const isOverBudget = value > max
+  const percentage = $derived(max > 0 ? Math.min((value / max) * 100, 100) : 0)
+  const isOverBudget = $derived(value > max)
 
-  const barColor = color ?? (isOverBudget ? '#FF6B6B' : percentage > 80 ? '#FFD3B6' : '#6BCB77')
+  const barColor = $derived(
+    color ?? (isOverBudget ? '#FF6B6B' : percentage > 80 ? '#FFD3B6' : '#6BCB77')
+  )
 
   const heights = {
     sm: 'h-1',

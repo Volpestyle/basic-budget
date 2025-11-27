@@ -37,10 +37,11 @@
     const lastDay = new Date(parseInt(year), parseInt(month), 0).getDate()
     const to = `${year}-${month}-${String(lastDay).padStart(2, '0')}`
 
-    filters = { from, to }
+    const loadFilters = { from, to }
+    filters = loadFilters
 
     await Promise.all([
-      transactionsStore.load(filters),
+      transactionsStore.load(loadFilters),
       categoriesStore.load(),
       incomeStreamsStore.load()
     ])

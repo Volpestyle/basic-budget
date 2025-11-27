@@ -9,6 +9,7 @@
   import AmountDisplay from '$components/AmountDisplay.svelte'
   import Spinner from '$components/Spinner.svelte'
   import BudgetSlider from '$components/BudgetSlider.svelte'
+  import DailyBudgetView from '$components/DailyBudgetView.svelte'
   import { duration, ease, prefersReducedMotion } from '$lib/motion/config'
   import { liquidEnter } from '$lib/motion/actions'
   import {
@@ -23,6 +24,7 @@
 
   let editing = $state(false)
   let saving = $state(false)
+  let selectedCategoryId = $state<string | null>(null)
   let budgetPercentages = $state<Record<string, number>>({})
   let budgetError = $state<string | null>(null)
   let prefilled = $state(false)
@@ -302,20 +304,25 @@
 
       for (const [categoryId, percentage] of Object.entries(budgetPercentages)) {
         const amountCents = Math.round((percentage / 100) * incomeCents)
-        if (amountCents > 0) {
-          budgets.push({ category_id: categoryId, planned_amount_cents: amountCents })
-        }
+        budgets.push({ category_id: categoryId, planned_amount_cents: amountCents })
       }
 
-      const totalPercentage = Object.values(budgetPercentages).reduce((sum, p) => sum + p, 0)
+      const totalPercentage = Math.round(
+        Object.values(budgetPercentages).reduce((sum, p) => sum + p, 0) * 10
+      ) / 10
 
-      if (totalPercentage > 100) {
+      if (totalPercentage - 100 > 0.0001) {
         budgetError = `Total allocation (${totalPercentage.toFixed(1)}%) cannot exceed 100%.`
         saving = false
         return
       }
 
       await budgetsStore.bulkUpsert($currentMonthStore, { budgets })
+      // Pull fresh data so summary/daily budget updates without a page reload
+      await Promise.all([
+        summaryStore.loadMonth($currentMonthStore),
+        budgetsStore.load($currentMonthStore)
+      ])
 
       // Capture refs before async operations
       const editModeContainer = editModeButtonsRef
@@ -429,7 +436,9 @@
   )
 
   const totalAllocatedPercentage = $derived(
-    Object.values(budgetPercentages).reduce((sum, p) => sum + p, 0)
+    Math.round(
+      Object.values(budgetPercentages).reduce((sum, p) => sum + p, 0) * 10
+    ) / 10
   )
 
   const plannedBudgetsTotal = $derived(
@@ -443,6 +452,16 @@
   const totalSpent = $derived(
     categoryBreakdown.reduce((sum, cat) => sum + cat.spent_cents, 0)
   )
+
+  function handlePercentageChange(categoryId: string, nextPercentage: number) {
+    const current = budgetPercentages[categoryId] ?? 0
+    const totalWithoutCurrent = totalAllocatedPercentage - current
+    const maxForCategory = Math.max(0, 100 - totalWithoutCurrent)
+    const clamped = Math.max(0, Math.min(nextPercentage, maxForCategory))
+    const rounded = Math.round(clamped * 10) / 10
+
+    budgetPercentages = { ...budgetPercentages, [categoryId]: rounded }
+  }
 
   // Animate cards on initial page load
   let hasAnimatedInitial = false
@@ -561,6 +580,17 @@
       </Card>
     </div>
 
+    <!-- Daily Budget View (only when not editing) -->
+    {#if !editing && summary}
+      <DailyBudgetView
+        {summary}
+        budgets={$budgetsStore.items}
+        categories={$categoriesStore.items}
+        currentMonth={$currentMonthStore}
+        {selectedCategoryId}
+      />
+    {/if}
+
     <!-- Category budgets grid -->
     {#if $expenseCategories.length === 0}
       <div class="text-center py-20">
@@ -576,6 +606,15 @@
           {@const spent = breakdown?.spent_cents ?? 0}
 
           <div>
+            <button
+              type="button"
+              onclick={() => !editing && (selectedCategoryId = selectedCategoryId === category.id ? null : category.id)}
+              disabled={editing}
+              class="w-full text-left rounded-lg transition-all
+                     {!editing && selectedCategoryId === category.id ? 'ring-2 ring-offset-2 ring-offset-ink-900' : ''}
+                     {editing ? 'cursor-default' : 'cursor-pointer'}"
+              style={!editing && selectedCategoryId === category.id ? `--tw-ring-color: ${category.color};` : ''}
+            >
             <Card variant="default" padding="md">
             <div class="flex items-center gap-3 mb-4">
               <span
@@ -587,13 +626,13 @@
 
             {#if editing}
               {@const currentPercentage = budgetPercentages[category.id] ?? 0}
-              {@const maxForCategory = 100 - totalAllocatedPercentage + currentPercentage}
+              {@const maxForCategory = Math.max(0, 100 - (totalAllocatedPercentage - currentPercentage))}
               <BudgetSlider
                 percentage={currentPercentage}
                 totalCents={summary?.income_total_cents ?? 0}
                 color={category.color}
                 maxPercentage={maxForCategory}
-                onchange={(p) => budgetPercentages[category.id] = p}
+                onchange={(p) => handlePercentageChange(category.id, p)}
               />
             {:else}
               <div class="space-y-3">
@@ -623,6 +662,7 @@
                 </div>
               {/if}
             </Card>
+            </button>
           </div>
         {/each}
       </div>

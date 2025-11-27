@@ -9,19 +9,22 @@
 
   let { cents, currency = 'USD', type = 'default', size = 'md', showSign = false }: Props = $props()
 
-  const amount = cents / 100
-  const isNegative = cents < 0
-  const displayAmount = Math.abs(amount)
+  const amount = $derived(cents / 100)
+  const isNegative = $derived(cents < 0)
+  const displayAmount = $derived(Math.abs(amount))
 
-  const formatter = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  })
+  const formatter = $derived.by(
+    () =>
+      new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      })
+  )
 
-  const formatted = formatter.format(displayAmount)
-  const prefix = showSign ? (isNegative ? '-' : '+') : ''
+  const formatted = $derived(formatter.format(displayAmount))
+  const prefix = $derived(showSign ? (isNegative ? '-' : '+') : '')
 
   const colors = {
     default: 'text-ink-900 dark:text-white',

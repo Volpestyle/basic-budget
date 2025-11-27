@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Transaction, TransactionType, CreateTransactionRequest } from '@basic-budget/types'
-  import Modal from './Modal.svelte'
+  import LiquidModal from './LiquidModal.svelte'
   import Button from './Button.svelte'
   import Input from './Input.svelte'
   import DatePicker from './DatePicker.svelte'
@@ -87,7 +87,7 @@
   }
 </script>
 
-<Modal
+<LiquidModal
   {open}
   onClose={handleClose}
   title={transaction ? 'Edit Transaction' : 'New Transaction'}
@@ -147,4 +147,4 @@
       </Button>
     </div>
   {/snippet}
-</Modal>
+</LiquidModal>

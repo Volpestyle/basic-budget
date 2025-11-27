@@ -3,22 +3,25 @@
     percentage: number
     totalCents: number
     color?: string
+    maxPercentage?: number
     onchange: (percentage: number) => void
   }
 
-  let { percentage, totalCents, color = '#6BCB77', onchange }: Props = $props()
+  let { percentage, totalCents, color = '#6BCB77', maxPercentage = 100, onchange }: Props = $props()
 
   let sliderTrack: HTMLDivElement | undefined = $state()
   let isDragging = $state(false)
 
   const amountCents = $derived(Math.round((percentage / 100) * totalCents))
+  const effectiveMax = $derived(Math.min(100, maxPercentage))
+  const isAtMax = $derived(percentage >= effectiveMax && effectiveMax < 100)
 
   function updateFromPosition(clientX: number) {
     if (!sliderTrack) return
 
     const rect = sliderTrack.getBoundingClientRect()
     const x = clientX - rect.left
-    const newPercentage = Math.max(0, Math.min(100, (x / rect.width) * 100))
+    const newPercentage = Math.max(0, Math.min(effectiveMax, (x / rect.width) * 100))
     onchange(Math.round(newPercentage * 10) / 10)
   }
 
@@ -38,7 +41,7 @@
   }
 
   function increment() {
-    const newVal = Math.min(100, percentage + 1)
+    const newVal = Math.min(effectiveMax, percentage + 1)
     onchange(newVal)
   }
 
@@ -72,8 +75,10 @@
     <button
       type="button"
       onclick={increment}
-      class="w-10 h-10 rounded-full bg-surface-800 border border-white/10 text-white text-xl font-medium
-             flex items-center justify-center active:scale-95 transition-transform touch-manipulation"
+      disabled={isAtMax}
+      class="w-10 h-10 rounded-full bg-surface-800 border text-xl font-medium
+             flex items-center justify-center active:scale-95 transition-all touch-manipulation
+             {isAtMax ? 'border-red-500/30 text-red-400/50 cursor-not-allowed' : 'border-white/10 text-white'}"
     >
       +
     </button>

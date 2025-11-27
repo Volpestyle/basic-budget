@@ -7,7 +7,7 @@
   import Button from '$components/Button.svelte'
   import Input from '$components/Input.svelte'
   import Select from '$components/Select.svelte'
-  import Modal from '$components/Modal.svelte'
+  import LiquidModal from '$components/LiquidModal.svelte'
   import Spinner from '$components/Spinner.svelte'
   import { authStore, currentUser, categoriesStore, activeCategories, authReady } from '$stores'
   import { usersApi } from '$api'
@@ -246,7 +246,7 @@
 </div>
 
 <!-- New Category Modal -->
-<Modal
+<LiquidModal
   open={showCategoryModal}
   onClose={() => (showCategoryModal = false)}
   title="New Category"
@@ -289,4 +289,4 @@
       </Button>
     </div>
   {/snippet}
-</Modal>
+</LiquidModal>

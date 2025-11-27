@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { tick } from 'svelte'
+  import { gsap } from 'gsap'
   import type { BulkBudgetRequest } from '@basic-budget/types'
   import Header from '$components/Header.svelte'
   import Card from '$components/Card.svelte'
@@ -7,6 +9,8 @@
   import AmountDisplay from '$components/AmountDisplay.svelte'
   import Spinner from '$components/Spinner.svelte'
   import BudgetSlider from '$components/BudgetSlider.svelte'
+  import { duration, ease, prefersReducedMotion } from '$lib/motion/config'
+  import { liquidEnter } from '$lib/motion/actions'
   import {
     currentMonthStore,
     budgetsStore,
@@ -23,6 +27,14 @@
   let budgetError = $state<string | null>(null)
   let prefilled = $state(false)
   let pageLoading = $state(true)
+
+  // Button refs for liquid animation
+  let editButtonRef = $state<HTMLDivElement>()
+  let editModeButtonsRef = $state<HTMLDivElement>()
+
+  // Content refs for mode transition animations
+  let allocationCardRef = $state<HTMLDivElement>()
+  let cardsGridRef = $state<HTMLDivElement>()
 
   let pendingLoad: Promise<void> | null = null
 
@@ -76,7 +88,7 @@
     prefilled = true
   })
 
-  function startEditing() {
+  async function startEditing() {
     const incomeCents = summary?.income_total_cents ?? 0
     const percentages: Record<string, number> = {}
     for (const cat of $expenseCategories) {
@@ -88,12 +100,196 @@
       }
     }
     budgetPercentages = percentages
+
+    // Capture refs before async operations
+    const editBtn = editButtonRef
+    const cardsGrid = cardsGridRef
+
+    // Animate out current content
+    if (!prefersReducedMotion()) {
+      const tl = gsap.timeline()
+
+      // Animate button out
+      if (editBtn) {
+        tl.to(editBtn, {
+          opacity: 0,
+          scale: 0.9,
+          x: -10,
+          duration: duration.fast,
+          ease: ease.exit
+        }, 0)
+      }
+
+      // Animate cards content out (scale down slightly)
+      if (cardsGrid) {
+        const cards = cardsGrid.querySelectorAll(':scope > div')
+        tl.to(cards, {
+          opacity: 0.5,
+          scale: 0.98,
+          duration: duration.fast,
+          ease: ease.exit,
+          stagger: 0.02
+        }, 0)
+      }
+
+      await tl
+    }
+
     editing = true
+    await tick()
+
+    // Animate in new content
+    if (!prefersReducedMotion()) {
+      const tl = gsap.timeline()
+
+      // Animate in the edit mode buttons
+      const editModeContainer = editModeButtonsRef
+      if (editModeContainer) {
+        const buttons = editModeContainer.querySelectorAll('button')
+        tl.fromTo(
+          buttons,
+          { opacity: 0, scale: 0.9, x: 10 },
+          {
+            opacity: 1,
+            scale: 1,
+            x: 0,
+            duration: duration.normal,
+            ease: ease.elastic,
+            stagger: 0.05
+          },
+          0
+        )
+      }
+
+      // Animate in allocation card
+      const allocationCard = allocationCardRef
+      if (allocationCard) {
+        tl.fromTo(
+          allocationCard,
+          { opacity: 0, scale: 0.95, y: -10 },
+          {
+            opacity: 1,
+            scale: 1,
+            y: 0,
+            duration: duration.normal,
+            ease: ease.elastic
+          },
+          0.05
+        )
+      }
+
+      // Animate cards back in with new content
+      const newCardsGrid = cardsGridRef
+      if (newCardsGrid) {
+        const cards = newCardsGrid.querySelectorAll(':scope > div')
+        tl.fromTo(
+          cards,
+          { opacity: 0.5, scale: 0.98 },
+          {
+            opacity: 1,
+            scale: 1,
+            duration: duration.normal,
+            ease: ease.elastic,
+            stagger: 0.03
+          },
+          0.1
+        )
+      }
+    }
   }
 
-  function cancelEditing() {
+  async function cancelEditing() {
+    // Capture refs before async operations
+    const editModeContainer = editModeButtonsRef
+    const allocationCard = allocationCardRef
+    const cardsGrid = cardsGridRef
+
+    // Animate out edit mode content
+    if (!prefersReducedMotion()) {
+      const tl = gsap.timeline()
+
+      // Animate buttons out
+      if (editModeContainer) {
+        const buttons = editModeContainer.querySelectorAll('button')
+        tl.to(buttons, {
+          opacity: 0,
+          scale: 0.9,
+          x: 10,
+          duration: duration.fast,
+          ease: ease.exit,
+          stagger: 0.03
+        }, 0)
+      }
+
+      // Animate allocation card out
+      if (allocationCard) {
+        tl.to(allocationCard, {
+          opacity: 0,
+          scale: 0.95,
+          y: -10,
+          duration: duration.fast,
+          ease: ease.exit
+        }, 0)
+      }
+
+      // Animate cards content out
+      if (cardsGrid) {
+        const cards = cardsGrid.querySelectorAll(':scope > div')
+        tl.to(cards, {
+          opacity: 0.5,
+          scale: 0.98,
+          duration: duration.fast,
+          ease: ease.exit,
+          stagger: 0.02
+        }, 0)
+      }
+
+      await tl
+    }
+
     editing = false
     initPercentages()
+    await tick()
+
+    // Animate in view mode content
+    if (!prefersReducedMotion()) {
+      const tl = gsap.timeline()
+
+      // Animate edit button in
+      const editBtn = editButtonRef
+      if (editBtn) {
+        tl.fromTo(
+          editBtn,
+          { opacity: 0, scale: 0.9, x: -10 },
+          {
+            opacity: 1,
+            scale: 1,
+            x: 0,
+            duration: duration.normal,
+            ease: ease.elastic
+          },
+          0
+        )
+      }
+
+      // Animate cards back in
+      const newCardsGrid = cardsGridRef
+      if (newCardsGrid) {
+        const cards = newCardsGrid.querySelectorAll(':scope > div')
+        tl.fromTo(
+          cards,
+          { opacity: 0.5, scale: 0.98 },
+          {
+            opacity: 1,
+            scale: 1,
+            duration: duration.normal,
+            ease: ease.elastic,
+            stagger: 0.03
+          },
+          0.05
+        )
+      }
+    }
   }
 
   async function saveBudgets() {
@@ -120,7 +316,97 @@
       }
 
       await budgetsStore.bulkUpsert($currentMonthStore, { budgets })
+
+      // Capture refs before async operations
+      const editModeContainer = editModeButtonsRef
+      const allocationCard = allocationCardRef
+      const cardsGrid = cardsGridRef
+
+      // Animate out edit mode content
+      if (!prefersReducedMotion()) {
+        const tl = gsap.timeline()
+
+        // Animate buttons out
+        if (editModeContainer) {
+          const buttons = editModeContainer.querySelectorAll('button')
+          tl.to(buttons, {
+            opacity: 0,
+            scale: 0.9,
+            x: 10,
+            duration: duration.fast,
+            ease: ease.exit,
+            stagger: 0.03
+          }, 0)
+        }
+
+        // Animate allocation card out
+        if (allocationCard) {
+          tl.to(allocationCard, {
+            opacity: 0,
+            scale: 0.95,
+            y: -10,
+            duration: duration.fast,
+            ease: ease.exit
+          }, 0)
+        }
+
+        // Animate cards content out
+        if (cardsGrid) {
+          const cards = cardsGrid.querySelectorAll(':scope > div')
+          tl.to(cards, {
+            opacity: 0.5,
+            scale: 0.98,
+            duration: duration.fast,
+            ease: ease.exit,
+            stagger: 0.02
+          }, 0)
+        }
+
+        await tl
+      }
+
       editing = false
+      await tick()
+
+      // Animate in view mode content
+      if (!prefersReducedMotion()) {
+        const tl = gsap.timeline()
+
+        // Animate edit button in
+        const editBtn = editButtonRef
+        if (editBtn) {
+          tl.fromTo(
+            editBtn,
+            { opacity: 0, scale: 0.9, x: -10 },
+            {
+              opacity: 1,
+              scale: 1,
+              x: 0,
+              duration: duration.normal,
+              ease: ease.elastic
+            },
+            0
+          )
+        }
+
+        // Animate cards back in
+        const newCardsGrid = cardsGridRef
+        if (newCardsGrid) {
+          const cards = newCardsGrid.querySelectorAll(':scope > div')
+          tl.fromTo(
+            cards,
+            { opacity: 0.5, scale: 0.98 },
+            {
+              opacity: 1,
+              scale: 1,
+              duration: duration.normal,
+              ease: ease.elastic,
+              stagger: 0.03
+            },
+            0.05
+          )
+        }
+      }
     } catch (err) {
       console.error('Failed to save budgets:', err)
     } finally {
@@ -157,6 +443,35 @@
   const totalSpent = $derived(
     categoryBreakdown.reduce((sum, cat) => sum + cat.spent_cents, 0)
   )
+
+  // Animate cards on initial page load
+  let hasAnimatedInitial = false
+  $effect(() => {
+    if (pageLoading || hasAnimatedInitial) return
+    hasAnimatedInitial = true
+
+    // Wait for next tick to ensure DOM is ready
+    tick().then(() => {
+      if (prefersReducedMotion()) return
+
+      const cardsGrid = cardsGridRef
+      if (cardsGrid) {
+        const cards = cardsGrid.querySelectorAll(':scope > div')
+        gsap.fromTo(
+          cards,
+          { opacity: 0, y: 20, scale: 0.98 },
+          {
+            opacity: 1,
+            y: 0,
+            scale: 1,
+            duration: duration.normal,
+            ease: ease.elastic,
+            stagger: 0.06
+          }
+        )
+      }
+    })
+  })
 </script>
 
 <svelte:head>
@@ -166,15 +481,19 @@
 <Header title="Budgets" showMonthPicker>
   {#snippet actions()}
     {#if editing}
-      <Button variant="ghost" onclick={cancelEditing}>Cancel</Button>
-      <Button variant="primary" onclick={saveBudgets} loading={saving}>Save</Button>
+      <div bind:this={editModeButtonsRef} class="flex items-center gap-2">
+        <Button variant="ghost" onclick={cancelEditing}>Cancel</Button>
+        <Button variant="primary" onclick={saveBudgets} loading={saving}>Save</Button>
+      </div>
     {:else}
-      <Button variant="primary" onclick={startEditing}>
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-        </svg>
-        Edit Budgets
-      </Button>
+      <div bind:this={editButtonRef}>
+        <Button variant="primary" onclick={startEditing}>
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+          </svg>
+          Edit Budgets
+        </Button>
+      </div>
     {/if}
   {/snippet}
 </Header>
@@ -193,8 +512,9 @@
 
     {#if editing}
       <!-- Total allocation indicator -->
-      <Card variant="default" padding="md">
-        <div class="flex items-center justify-between">
+      <div bind:this={allocationCardRef}>
+        <Card variant="default" padding="md">
+          <div class="flex items-center justify-between">
           <span class="text-sm text-gray-400">Total Allocated</span>
           <span class="text-lg font-semibold {totalAllocatedPercentage > 100 ? 'text-red-400' : 'text-white'}">
             {totalAllocatedPercentage.toFixed(1)}%
@@ -206,18 +526,20 @@
             style="width: {Math.min(totalAllocatedPercentage, 100)}%;"
           ></div>
         </div>
-        <p class="mt-2 text-xs text-gray-500">
-          {#if totalAllocatedPercentage > 100}
-            Over by {(totalAllocatedPercentage - 100).toFixed(1)}%
-          {:else}
-            {(100 - totalAllocatedPercentage).toFixed(1)}% unallocated
-          {/if}
-        </p>
-      </Card>
+          <p class="mt-2 text-xs text-gray-500">
+            {#if totalAllocatedPercentage > 100}
+              Over by {(totalAllocatedPercentage - 100).toFixed(1)}%
+            {:else}
+              {(100 - totalAllocatedPercentage).toFixed(1)}% unallocated
+            {/if}
+          </p>
+        </Card>
+      </div>
     {/if}
 
     <!-- Summary -->
-    <Card variant="glass" padding="lg">
+    <div use:liquidEnter>
+      <Card variant="glass" padding="lg">
       <div class="flex items-center justify-between">
         <div>
           <p class="text-sm text-gray-400">Total Budget</p>
@@ -229,14 +551,15 @@
         </div>
       </div>
       <div class="mt-4">
-        <ProgressBar
+          <ProgressBar
           value={totalSpent}
           max={totalBudget}
           size="lg"
           showLabel
         />
-      </div>
-    </Card>
+        </div>
+      </Card>
+    </div>
 
     <!-- Category budgets grid -->
     {#if $expenseCategories.length === 0}
@@ -245,14 +568,15 @@
         <p class="text-gray-400">Create expense categories first to set up budgets.</p>
       </div>
     {:else}
-      <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div bind:this={cardsGridRef} class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {#each $expenseCategories as category}
           {@const budget = $budgetsByCategoryId[category.id]}
           {@const breakdown = categoryBreakdown.find((c) => c.category_id === category.id)}
           {@const planned = budget?.planned_amount_cents ?? 0}
           {@const spent = breakdown?.spent_cents ?? 0}
 
-          <Card variant="default" padding="md">
+          <div>
+            <Card variant="default" padding="md">
             <div class="flex items-center gap-3 mb-4">
               <span
                 class="w-4 h-4 rounded-full flex-shrink-0"
@@ -262,10 +586,13 @@
             </div>
 
             {#if editing}
+              {@const currentPercentage = budgetPercentages[category.id] ?? 0}
+              {@const maxForCategory = 100 - totalAllocatedPercentage + currentPercentage}
               <BudgetSlider
-                percentage={budgetPercentages[category.id] ?? 0}
+                percentage={currentPercentage}
                 totalCents={summary?.income_total_cents ?? 0}
                 color={category.color}
+                maxPercentage={maxForCategory}
                 onchange={(p) => budgetPercentages[category.id] = p}
               />
             {:else}
@@ -293,9 +620,10 @@
                     </span>
                   {/if}
                 </div>
-              </div>
-            {/if}
-          </Card>
+                </div>
+              {/if}
+            </Card>
+          </div>
         {/each}
       </div>
     {/if}

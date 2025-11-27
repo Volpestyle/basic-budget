@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -14,6 +15,10 @@ import (
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/storage"
 )
 
+func isLambda() bool {
+	return os.Getenv("AWS_LAMBDA_RUNTIME_API") != ""
+}
+
 func main() {
 	ctx := context.Background()
 
@@ -21,7 +26,16 @@ func main() {
 	cfg := config.Load()
 
 	// Initialize DynamoDB client
-	dbClient, err := storage.NewClient(ctx)
+	var (
+		dbClient *storage.Client
+		err      error
+	)
+	if cfg.DynamoDBEndpoint != "" {
+		log.Printf("Using DynamoDB endpoint: %s", cfg.DynamoDBEndpoint)
+		dbClient, err = storage.NewClientWithEndpoint(ctx, cfg.DynamoDBEndpoint)
+	} else {
+		dbClient, err = storage.NewClient(ctx)
+	}
 	if err != nil {
 		log.Fatalf("failed to create DynamoDB client: %v", err)
 	}
@@ -92,9 +106,18 @@ func main() {
 		SummaryHandler:       summaryHandler,
 	})
 
-	// Create Lambda adapter
-	adapter := chiadapter.New(router)
-
-	// Start Lambda
-	lambda.Start(adapter.ProxyWithContext)
+	// Start server based on environment
+	if isLambda() {
+		// Running in AWS Lambda
+		adapter := chiadapter.New(router)
+		lambda.Start(adapter.ProxyWithContext)
+	} else {
+		// Running locally
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
+		}
+		log.Printf("Starting local server on http://localhost:%s", port)
+		log.Fatal(http.ListenAndServe(":"+port, router))
+	}
 }

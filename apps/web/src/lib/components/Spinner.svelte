@@ -7,20 +7,20 @@
   let { size = 'md', color }: Props = $props()
 
   const sizes = {
-    sm: 'h-4 w-4',
-    md: 'h-8 w-8',
-    lg: 'h-12 w-12'
+    sm: 'h-3 w-3',
+    md: 'h-5 w-5',
+    lg: 'h-8 w-8'
   }
 </script>
 
 <svg
-  class="animate-spin {sizes[size]}"
+  class="animate-spin text-ink-900/30 dark:text-white/30 {sizes[size]}"
   style={color ? `color: ${color}` : ''}
   xmlns="http://www.w3.org/2000/svg"
   fill="none"
   viewBox="0 0 24 24"
 >
-  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"
+  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"
   ></circle>
   <path
     class="opacity-75"

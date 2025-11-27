@@ -24,19 +24,19 @@
   const prefix = showSign ? (isNegative ? '-' : '+') : ''
 
   const colors = {
-    default: 'text-white',
-    income: 'text-green-400',
-    expense: 'text-red-400'
+    default: 'text-ink-900 dark:text-white',
+    income: 'text-positive',
+    expense: 'text-negative'
   }
 
   const sizes = {
-    sm: 'text-sm',
-    md: 'text-base',
-    lg: 'text-xl',
-    xl: 'text-3xl'
+    sm: 'text-xs',
+    md: 'text-sm',
+    lg: 'text-lg',
+    xl: 'text-2xl'
   }
 </script>
 
-<span class="font-mono font-semibold {colors[type]} {sizes[size]}">
+<span class="{colors[type]} {sizes[size]}">
   {prefix}{formatted}
 </span>

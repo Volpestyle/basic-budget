@@ -55,7 +55,7 @@
       fill="none"
       stroke="currentColor"
       stroke-width={strokeWidth}
-      class="text-white/5"
+      class="text-ink-900/5 dark:text-white/5"
     />
 
     <!-- Segments -->
@@ -81,10 +81,10 @@
   {#if centerLabel || centerValue}
     <div class="absolute inset-0 flex flex-col items-center justify-center">
       {#if centerValue}
-        <span class="text-2xl font-bold font-mono text-white">{centerValue}</span>
+        <span class="text-xl font-display font-bold text-ink-900 dark:text-white">{centerValue}</span>
       {/if}
       {#if centerLabel}
-        <span class="text-sm text-gray-400">{centerLabel}</span>
+        <span class="text-xs text-ink-900/40 dark:text-white/40">{centerLabel}</span>
       {/if}
     </div>
   {/if}

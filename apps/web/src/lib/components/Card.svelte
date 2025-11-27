@@ -3,7 +3,7 @@
   import type { HTMLAttributes } from 'svelte/elements'
 
   interface Props extends HTMLAttributes<HTMLDivElement> {
-    variant?: 'default' | 'glass' | 'bordered'
+    variant?: 'default' | 'bordered'
     padding?: 'none' | 'sm' | 'md' | 'lg'
     children: Snippet
   }
@@ -17,9 +17,8 @@
   }: Props = $props()
 
   const variants = {
-    default: 'bg-surface-800 border border-white/5',
-    glass: 'glass',
-    bordered: 'bg-transparent border border-white/10'
+    default: 'bg-cream-50 border border-ink-900/5 dark:bg-ink-800 dark:border-white/5',
+    bordered: 'bg-transparent border border-ink-900/10 dark:border-white/10'
   }
 
   const paddings = {
@@ -30,6 +29,6 @@
   }
 </script>
 
-<div class="rounded-xl {variants[variant]} {paddings[padding]} {className}" {...rest}>
+<div class="rounded-lg {variants[variant]} {paddings[padding]} {className}" {...rest}>
   {@render children()}
 </div>

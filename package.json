@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "turbo run dev",
     "dev:web": "turbo run dev --filter=@basic-budget/web",
+    "dev:api": "cd apps/api && make run",
+    "db:start": "docker compose up -d dynamodb",
+    "db:stop": "docker compose down",
+    "db:init": "cd apps/api && make initdb",
     "build": "turbo run build && pnpm build:api",
     "build:web": "turbo run build --filter=@basic-budget/web",
     "build:api": "cd apps/api && make build",

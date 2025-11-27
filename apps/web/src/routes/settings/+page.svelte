@@ -9,7 +9,7 @@
   import Select from '$components/Select.svelte'
   import Modal from '$components/Modal.svelte'
   import Spinner from '$components/Spinner.svelte'
-  import { authStore, currentUser, categoriesStore, activeCategories } from '$stores'
+  import { authStore, currentUser, categoriesStore, activeCategories, authReady } from '$stores'
   import { usersApi } from '$api'
 
   let saving = $state(false)
@@ -27,9 +27,16 @@
   let newCategoryColor = $state('#00F5D4')
 
   onMount(() => {
-    categoriesStore.load()
+    const maybeLoad = () => {
+      if ($authReady) {
+        void categoriesStore.load()
+      }
+    }
 
-    const unsubscribe = currentUser.subscribe((user) => {
+    maybeLoad()
+
+    const unsubscribeAuth = authReady.subscribe(maybeLoad)
+    const unsubscribeUser = currentUser.subscribe((user) => {
       if (user) {
         displayName = user.display_name
         currency = user.default_currency
@@ -37,7 +44,10 @@
       }
     })
 
-    return unsubscribe
+    return () => {
+      unsubscribeAuth()
+      unsubscribeUser()
+    }
   })
 
   async function saveSettings() {

@@ -37,6 +37,11 @@
     }
   }
 
+  // Initialize auth early on the client so API calls have a token on first render
+  if (typeof window !== 'undefined') {
+    authStore.initialize()
+  }
+
   onMount(() => {
     // Initialize dark mode from localStorage or system preference
     const stored = localStorage.getItem('darkMode')
@@ -45,8 +50,6 @@
     } else {
       darkMode = window.matchMedia('(prefers-color-scheme: dark)').matches
     }
-
-    authStore.initialize()
 
     const unsubscribe = authStore.subscribe((state) => {
       if (state.initialized) {

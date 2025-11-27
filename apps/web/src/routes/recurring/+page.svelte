@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
   import type { RecurringRule, CreateRecurringRuleRequest, RecurringInterval } from '@basic-budget/types'
   import Header from '$components/Header.svelte'
   import Card from '$components/Card.svelte'
@@ -7,11 +6,11 @@
   import Input from '$components/Input.svelte'
   import DatePicker from '$components/DatePicker.svelte'
   import Select from '$components/Select.svelte'
-  import Modal from '$components/Modal.svelte'
+  import LiquidModal from '$components/LiquidModal.svelte'
   import CategoryTag from '$components/CategoryTag.svelte'
   import AmountDisplay from '$components/AmountDisplay.svelte'
   import Spinner from '$components/Spinner.svelte'
-  import { recurringStore, categoriesStore, categoriesById, activeCategories } from '$stores'
+  import { recurringStore, categoriesStore, categoriesById, activeCategories, authReady } from '$stores'
 
   let showModal = $state(false)
   let editingRule = $state<RecurringRule | undefined>(undefined)
@@ -26,10 +25,6 @@
   let interval = $state<RecurringInterval>('monthly')
   let dayOfMonth = $state('1')
   let startDate = $state(new Date().toISOString().split('T')[0])
-
-  onMount(() => {
-    loadData()
-  })
 
   async function loadData() {
     await Promise.all([recurringStore.load(), categoriesStore.load()])
@@ -140,6 +135,12 @@
     const expenses = $recurringStore.items.filter((r) => r.type === 'expense')
     const incomes = $recurringStore.items.filter((r) => r.type === 'income')
     return { expenses, incomes }
+  })
+
+  // Load when auth is ready
+  $effect(() => {
+    if (!$authReady) return
+    void loadData()
   })
 </script>
 
@@ -286,7 +287,7 @@
   {/if}
 </div>
 
-<Modal
+<LiquidModal
   open={showModal}
   onClose={() => (showModal = false)}
   title={editingRule ? 'Edit Recurring Rule' : 'New Recurring Rule'}
@@ -324,4 +325,4 @@
       </Button>
     </div>
   {/snippet}
-</Modal>
+</LiquidModal>

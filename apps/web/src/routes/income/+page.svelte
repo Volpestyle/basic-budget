@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
   import type { IncomeStream, CreateIncomeStreamRequest } from '@basic-budget/types'
   import Header from '$components/Header.svelte'
   import Card from '$components/Card.svelte'
@@ -7,11 +6,11 @@
   import Input from '$components/Input.svelte'
   import DatePicker from '$components/DatePicker.svelte'
   import Select from '$components/Select.svelte'
-  import Modal from '$components/Modal.svelte'
+  import LiquidModal from '$components/LiquidModal.svelte'
   import AmountDisplay from '$components/AmountDisplay.svelte'
   import ProgressBar from '$components/ProgressBar.svelte'
   import Spinner from '$components/Spinner.svelte'
-  import { incomeStreamsStore, categoriesStore, incomeCategories } from '$stores'
+  import { incomeStreamsStore, categoriesStore, incomeCategories, authReady } from '$stores'
 
   let showModal = $state(false)
   let editingStream = $state<IncomeStream | undefined>(undefined)
@@ -25,10 +24,6 @@
   let expectedAmount = $state('')
   let startDate = $state(new Date().toISOString().split('T')[0])
   let endDate = $state('')
-
-  onMount(() => {
-    loadData()
-  })
 
   async function loadData() {
     await Promise.all([incomeStreamsStore.load(), categoriesStore.load()])
@@ -122,6 +117,12 @@
     biweekly: '/2 weeks',
     once: 'one-time'
   }
+
+  // Load when auth is ready
+  $effect(() => {
+    if (!$authReady) return
+    void loadData()
+  })
 </script>
 
 <svelte:head>
@@ -202,7 +203,7 @@
   {/if}
 </div>
 
-<Modal
+<LiquidModal
   open={showModal}
   onClose={() => (showModal = false)}
   title={editingStream ? 'Edit Income Stream' : 'New Income Stream'}
@@ -237,4 +238,4 @@
       </Button>
     </div>
   {/snippet}
-</Modal>
+</LiquidModal>

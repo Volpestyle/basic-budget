@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
   import type { BulkBudgetRequest } from '@basic-budget/types'
   import Header from '$components/Header.svelte'
   import Card from '$components/Card.svelte'
@@ -14,7 +13,8 @@
     budgetsByCategoryId,
     categoriesStore,
     expenseCategories,
-    summaryStore
+    summaryStore,
+    authReady
   } from '$stores'
 
   let editing = $state(false)
@@ -22,25 +22,25 @@
   let budgetPercentages = $state<Record<string, number>>({})
   let budgetError = $state<string | null>(null)
   let prefilled = $state(false)
+  let pageLoading = $state(true)
 
-  onMount(() => {
-    loadData()
-
-    const unsubscribe = currentMonthStore.subscribe(() => {
-      loadData()
-    })
-
-    return unsubscribe
-  })
+  let pendingLoad: Promise<void> | null = null
 
   async function loadData() {
-    await Promise.all([
-      budgetsStore.load($currentMonthStore),
-      categoriesStore.load(),
-      summaryStore.loadMonth($currentMonthStore)
-    ])
-
-    initPercentages()
+    if (pendingLoad) return
+    pendingLoad = (async () => {
+      pageLoading = true
+      await Promise.all([
+        budgetsStore.load($currentMonthStore),
+        categoriesStore.load(),
+        summaryStore.loadMonth($currentMonthStore)
+      ])
+      initPercentages()
+      pageLoading = false
+    })().finally(() => {
+      pendingLoad = null
+    })
+    await pendingLoad
   }
 
   function initPercentages() {
@@ -130,6 +130,14 @@
 
   const summary = $derived($summaryStore.monthly)
 
+  // Load when auth is ready and on month changes
+  $effect(() => {
+    if (!$authReady) return
+    // Ensure dependency on currentMonthStore
+    $currentMonthStore
+    void loadData()
+  })
+
   const categoryBreakdown = $derived(
     summary?.category_breakdown ?? []
   )
@@ -171,8 +179,8 @@
   {/snippet}
 </Header>
 
-<div class="p-6 space-y-6">
-  {#if $budgetsStore.loading || $categoriesStore.loading}
+  <div class="p-6 space-y-6">
+  {#if pageLoading || $budgetsStore.loading || $categoriesStore.loading}
     <div class="flex items-center justify-center py-20">
       <Spinner size="lg" />
     </div>

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
   import type { Transaction, CreateTransactionRequest, TransactionFilters } from '@basic-budget/types'
   import Header from '$components/Header.svelte'
   import Card from '$components/Card.svelte'
@@ -16,7 +15,8 @@
     categoriesById,
     activeCategories,
     incomeStreamsStore,
-    currentMonthStore
+    currentMonthStore,
+    authReady
   } from '$stores'
 
   let showModal = $state(false)
@@ -27,10 +27,6 @@
   let searchQuery = $state('')
   let selectedCategory = $state('')
   let selectedType = $state('')
-
-  onMount(() => {
-    loadData()
-  })
 
   async function loadData() {
     // Get date range for current month
@@ -118,6 +114,14 @@
       }
     }
     return Object.entries(grouped).sort(([a], [b]) => b.localeCompare(a))
+  })
+
+  // Load when auth is ready and month changes
+  $effect(() => {
+    if (!$authReady) return
+    // dependency on month
+    $currentMonthStore
+    void loadData()
   })
 </script>
 

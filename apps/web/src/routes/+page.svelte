@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
   import Header from '$components/Header.svelte'
   import Card from '$components/Card.svelte'
   import AmountDisplay from '$components/AmountDisplay.svelte'
@@ -13,20 +12,11 @@
     categoriesStore,
     categoriesById,
     recurringStore,
-    upcomingRecurring
+    upcomingRecurring,
+    authReady
   } from '$stores'
 
   let loading = $state(true)
-
-  onMount(() => {
-    loadData()
-
-    const unsubscribe = currentMonthStore.subscribe(() => {
-      loadData()
-    })
-
-    return unsubscribe
-  })
 
   async function loadData() {
     loading = true
@@ -73,6 +63,14 @@
       ? Math.round(((summary.income_total_cents - summary.expense_total_cents) / summary.income_total_cents) * 100)
       : 0
   )
+
+  // Load when auth is ready and month changes
+  $effect(() => {
+    if (!$authReady) return
+    // dependency on month
+    $currentMonthStore
+    void loadData()
+  })
 </script>
 
 <svelte:head>

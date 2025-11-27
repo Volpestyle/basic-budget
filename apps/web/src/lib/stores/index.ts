@@ -1,4 +1,4 @@
-export { authStore, isAuthenticated, currentUser } from './auth'
+export { authStore, isAuthenticated, authReady, currentUser } from './auth'
 export {
   currentMonthStore,
   currentMonthDisplay,

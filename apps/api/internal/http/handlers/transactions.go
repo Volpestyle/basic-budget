@@ -48,8 +48,9 @@ type UpdateTransactionRequest struct {
 }
 
 type ListTransactionsResponse struct {
-	Transactions []core.Transaction `json:"transactions"`
-	NextCursor   string             `json:"next_cursor,omitempty"`
+	Data       []core.Transaction `json:"data"`
+	NextCursor string             `json:"next_cursor,omitempty"`
+	HasMore    bool               `json:"has_more"`
 }
 
 // HandleList handles GET /transactions
@@ -102,8 +103,9 @@ func (h *TransactionsHandler) HandleList(w http.ResponseWriter, r *http.Request)
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, ListTransactionsResponse{
-		Transactions: transactions,
-		NextCursor:   nextCursor,
+		Data:       transactions,
+		NextCursor: nextCursor,
+		HasMore:    nextCursor != "",
 	})
 }
 

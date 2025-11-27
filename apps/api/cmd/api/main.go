@@ -84,14 +84,14 @@ func main() {
 	jwtManager := auth.NewJWTManager(jwtSecret, cfg.JWTExpiry)
 
 	// Initialize handlers
-	authHandler := handlers.NewAuthHandler(googleVerifier, jwtManager, usersRepo)
+	authHandler := handlers.NewAuthHandler(googleVerifier, jwtManager, usersRepo, categoriesRepo)
 	usersHandler := handlers.NewUsersHandler(usersRepo)
 	categoriesHandler := handlers.NewCategoriesHandler(categoriesRepo)
 	budgetsHandler := handlers.NewBudgetsHandler(budgetsRepo)
 	transactionsHandler := handlers.NewTransactionsHandler(transactionsRepo)
 	incomeStreamsHandler := handlers.NewIncomeStreamsHandler(incomeStreamsRepo)
 	recurringHandler := handlers.NewRecurringHandler(recurringRepo)
-	summaryHandler := handlers.NewSummaryHandler(transactionsRepo, budgetsRepo, recurringRepo)
+	summaryHandler := handlers.NewSummaryHandler(transactionsRepo, budgetsRepo, recurringRepo, incomeStreamsRepo, categoriesRepo)
 
 	// Create router
 	router := httpapi.NewRouter(httpapi.RouterConfig{

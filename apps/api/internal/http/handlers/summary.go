@@ -2,27 +2,35 @@ package handlers
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jamesvolpe/basic-budget/apps/api/internal/core"
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/httputil"
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/storage"
 )
 
 type SummaryHandler struct {
-	transactionsRepo *storage.TransactionsRepository
-	budgetsRepo      *storage.BudgetsRepository
-	recurringRepo    *storage.RecurringRepository
+	transactionsRepo  *storage.TransactionsRepository
+	budgetsRepo       *storage.BudgetsRepository
+	recurringRepo     *storage.RecurringRepository
+	incomeStreamsRepo *storage.IncomeStreamsRepository
+	categoriesRepo    *storage.CategoriesRepository
 }
 
 func NewSummaryHandler(
 	transactionsRepo *storage.TransactionsRepository,
 	budgetsRepo *storage.BudgetsRepository,
 	recurringRepo *storage.RecurringRepository,
+	incomeStreamsRepo *storage.IncomeStreamsRepository,
+	categoriesRepo *storage.CategoriesRepository,
 ) *SummaryHandler {
 	return &SummaryHandler{
-		transactionsRepo: transactionsRepo,
-		budgetsRepo:      budgetsRepo,
-		recurringRepo:    recurringRepo,
+		transactionsRepo:  transactionsRepo,
+		budgetsRepo:       budgetsRepo,
+		recurringRepo:     recurringRepo,
+		incomeStreamsRepo: incomeStreamsRepo,
+		categoriesRepo:    categoriesRepo,
 	}
 }
 
@@ -60,11 +68,76 @@ func (h *SummaryHandler) HandleMonthSummary(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Get transaction totals
-	income, expenses, byCategory, err := h.transactionsRepo.GetMonthSummary(r.Context(), userCtx.UserID, month)
+	monthStart, err := time.Parse("2006-01-02", month+"-01")
 	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to get transaction summary")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "invalid month format")
 		return
+	}
+	monthEnd := monthStart.AddDate(0, 1, -1)
+
+	// Planned income from active income streams
+	streams, err := h.incomeStreamsRepo.List(r.Context(), userCtx.UserID)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to get income streams")
+		return
+	}
+
+	var income int64
+	for _, s := range streams {
+		if !s.IsActive {
+			continue
+		}
+		startDate, err := time.Parse("2006-01-02", s.StartDate)
+		if err != nil {
+			continue
+		}
+		var endDate *time.Time
+		if s.EndDate != "" {
+			if ed, err := time.Parse("2006-01-02", s.EndDate); err == nil {
+				endDate = &ed
+			}
+		}
+		occurrences := countIncomeOccurrences(s.Period, startDate, endDate, monthStart, monthEnd)
+		if occurrences > 0 {
+			income += int64(occurrences) * s.ExpectedAmountCents
+		}
+	}
+
+	// Planned expenses/income from recurring rules
+	rules, err := h.recurringRepo.List(r.Context(), userCtx.UserID)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to get recurring rules")
+		return
+	}
+
+	byCategory := make(map[string]int64)
+	var expenses int64
+	for _, rule := range rules {
+		if !rule.IsActive {
+			continue
+		}
+		startDate, err := time.Parse("2006-01-02", rule.StartDate)
+		if err != nil {
+			continue
+		}
+		var endDate *time.Time
+		if rule.EndDate != "" {
+			if ed, err := time.Parse("2006-01-02", rule.EndDate); err == nil {
+				endDate = &ed
+			}
+		}
+		occurrences := countRecurringOccurrences(rule, startDate, endDate, monthStart, monthEnd)
+		if occurrences == 0 {
+			continue
+		}
+
+		total := int64(occurrences) * rule.AmountCents
+		if rule.Type == core.TransactionTypeIncome {
+			income += total
+		} else {
+			expenses += total
+			byCategory[rule.CategoryID] += total
+		}
 	}
 
 	// Get budgets for the month
@@ -91,34 +164,7 @@ func (h *SummaryHandler) HandleMonthSummary(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Calculate recurring vs variable (simplified - based on whether transaction has recurring_rule_id)
-	// In a real app, you'd query transactions with recurring_rule_id set
-	from := month + "-01"
-	to := month + "-31"
-
-	txParams := storage.ListTransactionsParams{
-		UserID: userCtx.UserID,
-		From:   from,
-		To:     to,
-		Limit:  1000,
-	}
-
-	transactions, _, err := h.transactionsRepo.List(r.Context(), txParams)
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to get transactions")
-		return
-	}
-
-	var recurringExpenses, variableExpenses int64
-	for _, tx := range transactions {
-		if tx.Type == "expense" {
-			if tx.RecurringRuleID != "" {
-				recurringExpenses += tx.AmountCents
-			} else {
-				variableExpenses += tx.AmountCents
-			}
-		}
-	}
-
+	// Here we only have recurring-derived expenses; treat them all as recurring.
 	response := MonthSummaryResponse{
 		Month:             month,
 		IncomeTotalCents:  income,
@@ -126,8 +172,8 @@ func (h *SummaryHandler) HandleMonthSummary(w http.ResponseWriter, r *http.Reque
 		NetCents:          income - expenses,
 		CategoryBreakdown: categoryBreakdown,
 		RecurringVsVariable: RecurringVsVariable{
-			RecurringExpensesCents: recurringExpenses,
-			VariableExpensesCents:  variableExpenses,
+			RecurringExpensesCents: expenses,
+			VariableExpensesCents:  0,
 		},
 	}
 
@@ -202,4 +248,130 @@ func (h *SummaryHandler) HandleCashflow(w http.ResponseWriter, r *http.Request) 
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, CashflowResponse{Periods: periods})
+}
+
+func countIncomeOccurrences(period core.IncomeStreamPeriod, start time.Time, end *time.Time, monthStart, monthEnd time.Time) int {
+	// If outside range entirely
+	if start.After(monthEnd) || (end != nil && end.Before(monthStart)) {
+		return 0
+	}
+
+	switch period {
+	case core.IncomeStreamPeriodOnce:
+		if start.After(monthStart.AddDate(0, 1, 0).Add(-time.Nanosecond)) || start.Before(monthStart) {
+			return 0
+		}
+		return 1
+	case core.IncomeStreamPeriodMonthly:
+		return 1
+	case core.IncomeStreamPeriodBiweekly:
+		return countOccurrencesEveryNDays(start, end, monthStart, monthEnd, 14)
+	default:
+		return 0
+	}
+}
+
+func countRecurringOccurrences(rule core.RecurringRule, start time.Time, end *time.Time, monthStart, monthEnd time.Time) int {
+	if start.After(monthEnd) || (end != nil && end.Before(monthStart)) {
+		return 0
+	}
+
+	switch rule.Interval {
+	case core.RecurringIntervalMonthly:
+		day := rule.DayOfMonth
+		if day <= 0 {
+			day = start.Day()
+		}
+		occDate := time.Date(monthStart.Year(), monthStart.Month(), day, 0, 0, 0, 0, time.UTC)
+		lastDay := monthStart.AddDate(0, 1, -1).Day()
+		if day > lastDay {
+			occDate = time.Date(monthStart.Year(), monthStart.Month(), lastDay, 0, 0, 0, 0, time.UTC)
+		}
+		if occDate.Before(start) {
+			// If the start date is within this month and after the chosen day, count it on the start date
+			if start.Year() == monthStart.Year() && start.Month() == monthStart.Month() {
+				occDate = time.Date(monthStart.Year(), monthStart.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+			} else {
+				return 0
+			}
+		}
+		if end != nil && occDate.After(*end) {
+			return 0
+		}
+		return 1
+	case core.RecurringIntervalWeekly:
+		weekday := parseWeekday(rule.Weekday)
+		if weekday == time.Sunday && rule.Weekday == "" {
+			weekday = start.Weekday()
+		}
+		return countWeeklyOccurrences(start, end, monthStart, monthEnd, weekday, 7)
+	case core.RecurringIntervalBiweekly:
+		return countOccurrencesEveryNDays(start, end, monthStart, monthEnd, 14)
+	default:
+		return 0
+	}
+}
+
+func countOccurrencesEveryNDays(start time.Time, end *time.Time, monthStart, monthEnd time.Time, days int) int {
+	occ := start
+	// Move forward to the first occurrence not before monthStart
+	for occ.Before(monthStart) {
+		occ = occ.AddDate(0, 0, days)
+		if end != nil && occ.After(*end) {
+			return 0
+		}
+	}
+
+	count := 0
+	for !occ.After(monthEnd) {
+		if end != nil && occ.After(*end) {
+			break
+		}
+		count++
+		occ = occ.AddDate(0, 0, days)
+	}
+	return count
+}
+
+func countWeeklyOccurrences(start time.Time, end *time.Time, monthStart, monthEnd time.Time, weekday time.Weekday, stepDays int) int {
+	// Find first occurrence on or after start
+	occ := start
+	for occ.Weekday() != weekday {
+		occ = occ.AddDate(0, 0, 1)
+	}
+	// Move forward to monthStart
+	for occ.Before(monthStart) {
+		occ = occ.AddDate(0, 0, stepDays)
+	}
+
+	count := 0
+	for !occ.After(monthEnd) {
+		if end != nil && occ.After(*end) {
+			break
+		}
+		count++
+		occ = occ.AddDate(0, 0, stepDays)
+	}
+	return count
+}
+
+func parseWeekday(s string) time.Weekday {
+	switch s {
+	case "MON":
+		return time.Monday
+	case "TUE":
+		return time.Tuesday
+	case "WED":
+		return time.Wednesday
+	case "THU":
+		return time.Thursday
+	case "FRI":
+		return time.Friday
+	case "SAT":
+		return time.Saturday
+	case "SUN":
+		return time.Sunday
+	default:
+		return time.Sunday
+	}
 }

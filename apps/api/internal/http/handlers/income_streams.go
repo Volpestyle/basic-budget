@@ -27,6 +27,8 @@ type CreateIncomeStreamRequest struct {
 	DefaultCategoryID   string                  `json:"default_category_id,omitempty"`
 	Period              core.IncomeStreamPeriod `json:"period"`
 	ExpectedAmountCents int64                   `json:"expected_amount_cents"`
+	StartDate           string                  `json:"start_date"`
+	EndDate             string                  `json:"end_date,omitempty"`
 }
 
 type UpdateIncomeStreamRequest struct {
@@ -35,6 +37,8 @@ type UpdateIncomeStreamRequest struct {
 	Period              *core.IncomeStreamPeriod `json:"period,omitempty"`
 	ExpectedAmountCents *int64                   `json:"expected_amount_cents,omitempty"`
 	IsActive            *bool                    `json:"is_active,omitempty"`
+	StartDate           *string                  `json:"start_date,omitempty"`
+	EndDate             *string                  `json:"end_date,omitempty"`
 }
 
 // HandleList handles GET /income-streams
@@ -72,6 +76,10 @@ func (h *IncomeStreamsHandler) HandleCreate(w http.ResponseWriter, r *http.Reque
 		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "name is required")
 		return
 	}
+	if req.StartDate == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid_request", "start_date is required")
+		return
+	}
 
 	stream := &core.IncomeStream{
 		ID:                  uuid.New().String(),
@@ -80,6 +88,8 @@ func (h *IncomeStreamsHandler) HandleCreate(w http.ResponseWriter, r *http.Reque
 		DefaultCategoryID:   req.DefaultCategoryID,
 		Period:              req.Period,
 		ExpectedAmountCents: req.ExpectedAmountCents,
+		StartDate:           req.StartDate,
+		EndDate:             req.EndDate,
 		IsActive:            true,
 		CreatedAt:           time.Now(),
 	}
@@ -141,6 +151,12 @@ func (h *IncomeStreamsHandler) HandleUpdate(w http.ResponseWriter, r *http.Reque
 	}
 	if req.IsActive != nil {
 		stream.IsActive = *req.IsActive
+	}
+	if req.StartDate != nil {
+		stream.StartDate = *req.StartDate
+	}
+	if req.EndDate != nil {
+		stream.EndDate = *req.EndDate
 	}
 
 	if err := h.incomeStreamsRepo.Update(r.Context(), stream); err != nil {

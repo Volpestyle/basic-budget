@@ -41,9 +41,9 @@ type Category struct {
 type MonthBudget struct {
 	ID                 string `json:"id" dynamodbav:"id"`
 	UserID             string `json:"user_id" dynamodbav:"user_id"`
-	Month              string `json:"month" dynamodbav:"month"`                               // YYYY-MM
+	Month              string `json:"month" dynamodbav:"month"` // YYYY-MM
 	CategoryID         string `json:"category_id" dynamodbav:"category_id"`
-	MonthCategory      string `json:"-" dynamodbav:"month_category"`                          // Sort key: "2025-11#cat-123"
+	MonthCategory      string `json:"-" dynamodbav:"month_category"` // Sort key: "2025-11#cat-123"
 	PlannedAmountCents int64  `json:"planned_amount_cents" dynamodbav:"planned_amount_cents"`
 }
 
@@ -70,8 +70,8 @@ type Transaction struct {
 	Description     string          `json:"description" dynamodbav:"description"`
 	Merchant        string          `json:"merchant,omitempty" dynamodbav:"merchant,omitempty"`
 	Tags            []string        `json:"tags,omitempty" dynamodbav:"tags,omitempty"`
-	DateTxID        string          `json:"-" dynamodbav:"date_tx_id"`       // Sort key: "2025-11-23#tx-123"
-	UserCategory    string          `json:"-" dynamodbav:"user_category"`    // GSI PK: "user-123#cat-456"
+	DateTxID        string          `json:"-" dynamodbav:"date_tx_id"`    // Sort key: "2025-11-23#tx-123"
+	UserCategory    string          `json:"-" dynamodbav:"user_category"` // GSI PK: "user-123#cat-456"
 	CreatedAt       time.Time       `json:"created_at" dynamodbav:"created_at"`
 	UpdatedAt       time.Time       `json:"updated_at" dynamodbav:"updated_at"`
 }
@@ -123,5 +123,7 @@ type IncomeStream struct {
 	Period              IncomeStreamPeriod `json:"period" dynamodbav:"period"`
 	ExpectedAmountCents int64              `json:"expected_amount_cents" dynamodbav:"expected_amount_cents"`
 	IsActive            bool               `json:"is_active" dynamodbav:"is_active"`
+	StartDate           string             `json:"start_date" dynamodbav:"start_date"`
+	EndDate             string             `json:"end_date,omitempty" dynamodbav:"end_date,omitempty"`
 	CreatedAt           time.Time          `json:"created_at" dynamodbav:"created_at"`
 }

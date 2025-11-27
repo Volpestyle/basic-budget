@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -16,17 +18,20 @@ type AuthHandler struct {
 	googleVerifier *auth.GoogleVerifier
 	jwtManager     *auth.JWTManager
 	usersRepo      *storage.UsersRepository
+	categoriesRepo *storage.CategoriesRepository
 }
 
 func NewAuthHandler(
 	googleVerifier *auth.GoogleVerifier,
 	jwtManager *auth.JWTManager,
 	usersRepo *storage.UsersRepository,
+	categoriesRepo *storage.CategoriesRepository,
 ) *AuthHandler {
 	return &AuthHandler{
 		googleVerifier: googleVerifier,
 		jwtManager:     jwtManager,
 		usersRepo:      usersRepo,
+		categoriesRepo: categoriesRepo,
 	}
 }
 
@@ -84,6 +89,11 @@ func (h *AuthHandler) HandleGoogleAuth(w http.ResponseWriter, r *http.Request) {
 				httputil.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to create user")
 				return
 			}
+
+			// Best-effort seed default categories for new users
+			if err := h.seedDefaultCategories(r.Context(), user.ID); err != nil {
+				log.Printf("failed to seed default categories for user %s: %v", user.ID, err)
+			}
 		} else {
 			httputil.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to find user")
 			return
@@ -112,4 +122,45 @@ func (h *AuthHandler) HandleGoogleAuth(w http.ResponseWriter, r *http.Request) {
 		Token: token,
 		User:  user,
 	})
+}
+
+func (h *AuthHandler) seedDefaultCategories(ctx context.Context, userID string) error {
+	// Skip if user already has categories
+	if cats, err := h.categoriesRepo.List(ctx, userID); err == nil && len(cats) > 0 {
+		return nil
+	}
+
+	now := time.Now()
+	categories := []struct {
+		name  string
+		typ   core.CategoryType
+		color string
+		icon  string
+	}{
+		{name: "Living", typ: core.CategoryTypeExpense, color: "#22c55e", icon: "home"},
+		{name: "Employment", typ: core.CategoryTypeIncome, color: "#0ea5e9", icon: "briefcase"},
+		{name: "Travel", typ: core.CategoryTypeExpense, color: "#f97316", icon: "plane"},
+		{name: "Food", typ: core.CategoryTypeExpense, color: "#f59e0b", icon: "utensils"},
+		{name: "Amenities", typ: core.CategoryTypeExpense, color: "#8b5cf6", icon: "sparkles"},
+		{name: "Fun", typ: core.CategoryTypeExpense, color: "#ec4899", icon: "music"},
+	}
+
+	for idx, cat := range categories {
+		category := &core.Category{
+			ID:         uuid.New().String(),
+			UserID:     userID,
+			Name:       cat.name,
+			Type:       cat.typ,
+			Color:      cat.color,
+			Icon:       cat.icon,
+			SortOrder:  idx + 1,
+			IsArchived: false,
+			CreatedAt:  now,
+		}
+		if err := h.categoriesRepo.Create(ctx, category); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

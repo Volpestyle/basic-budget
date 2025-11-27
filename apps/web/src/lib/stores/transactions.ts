@@ -6,6 +6,12 @@ import type {
   TransactionFilters
 } from '@basic-budget/types'
 import { transactionsApi } from '$api'
+import {
+  isOnline,
+  addToPendingQueue,
+  cacheTransactions,
+  getCachedTransactions
+} from '$lib/offline'
 
 interface TransactionsState {
   items: Transaction[]
@@ -14,6 +20,8 @@ interface TransactionsState {
   hasMore: boolean
   cursor: string | null
   filters: TransactionFilters
+  offline: boolean
+  pendingCount: number
 }
 
 function createTransactionsStore() {
@@ -23,7 +31,9 @@ function createTransactionsStore() {
     error: null,
     hasMore: false,
     cursor: null,
-    filters: {}
+    filters: {},
+    offline: false,
+    pendingCount: 0
   })
 
   return {
@@ -31,22 +41,72 @@ function createTransactionsStore() {
 
     async load(filters: TransactionFilters = {}) {
       update((state) => ({ ...state, loading: true, error: null, filters }))
+
+      // If offline, try to load from cache
+      if (!isOnline()) {
+        try {
+          const cached = await getCachedTransactions()
+          set({
+            items: cached,
+            loading: false,
+            error: null,
+            hasMore: false,
+            cursor: null,
+            filters,
+            offline: true,
+            pendingCount: 0
+          })
+          return
+        } catch {
+          update((state) => ({
+            ...state,
+            loading: false,
+            error: 'Offline - no cached data available',
+            offline: true
+          }))
+          return
+        }
+      }
+
       try {
         const response = await transactionsApi.list(filters)
+
+        // Cache the transactions for offline use
+        await cacheTransactions(response.data).catch(() => {
+          // Silently fail caching
+        })
+
         set({
           items: response.data,
           loading: false,
           error: null,
           hasMore: response.has_more,
           cursor: response.next_cursor ?? null,
-          filters
+          filters,
+          offline: false,
+          pendingCount: 0
         })
       } catch (err) {
-        update((state) => ({
-          ...state,
-          loading: false,
-          error: err instanceof Error ? err.message : 'Failed to load transactions'
-        }))
+        // If network error, try cache
+        try {
+          const cached = await getCachedTransactions()
+          set({
+            items: cached,
+            loading: false,
+            error: 'Using cached data - network unavailable',
+            hasMore: false,
+            cursor: null,
+            filters,
+            offline: true,
+            pendingCount: 0
+          })
+        } catch {
+          update((state) => ({
+            ...state,
+            loading: false,
+            error: err instanceof Error ? err.message : 'Failed to load transactions'
+          }))
+        }
       }
     },
 
@@ -87,6 +147,39 @@ function createTransactionsStore() {
 
     async create(data: CreateTransactionRequest) {
       update((state) => ({ ...state, loading: true, error: null }))
+
+      // If offline, queue the transaction
+      if (!isOnline()) {
+        await addToPendingQueue('create', data)
+
+        // Create optimistic local transaction
+        const optimisticTx: Transaction = {
+          id: `pending-${Date.now()}`,
+          user_id: 'local',
+          type: data.type,
+          category_id: data.category_id,
+          amount_cents: data.amount_cents,
+          currency: data.currency,
+          date: data.date,
+          description: data.description ?? '',
+          merchant: data.merchant ?? '',
+          tags: data.tags ?? [],
+          recurring_rule_id: data.recurring_rule_id ?? null,
+          income_stream_id: data.income_stream_id ?? null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        }
+
+        update((state) => ({
+          ...state,
+          items: [optimisticTx, ...state.items],
+          loading: false,
+          pendingCount: state.pendingCount + 1
+        }))
+
+        return optimisticTx
+      }
+
       try {
         const transaction = await transactionsApi.create(data)
         update((state) => ({
@@ -96,6 +189,18 @@ function createTransactionsStore() {
         }))
         return transaction
       } catch (err) {
+        // If network error, queue for later
+        if (err instanceof TypeError && err.message.includes('fetch')) {
+          await addToPendingQueue('create', data)
+          update((state) => ({
+            ...state,
+            loading: false,
+            error: 'Saved offline - will sync when online',
+            pendingCount: state.pendingCount + 1
+          }))
+          return null as unknown as Transaction
+        }
+
         update((state) => ({
           ...state,
           loading: false,
@@ -151,8 +256,18 @@ function createTransactionsStore() {
         error: null,
         hasMore: false,
         cursor: null,
-        filters: {}
+        filters: {},
+        offline: false,
+        pendingCount: 0
       })
+    },
+
+    setOfflineStatus(offline: boolean) {
+      update((state) => ({ ...state, offline }))
+    },
+
+    setPendingCount(count: number) {
+      update((state) => ({ ...state, pendingCount: count }))
     }
   }
 }

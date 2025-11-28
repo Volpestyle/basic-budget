@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/core"
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/httputil"
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/storage"
@@ -23,30 +24,30 @@ func NewRecurringHandler(recurringRepo *storage.RecurringRepository) *RecurringH
 }
 
 type CreateRecurringRequest struct {
-	Type                 core.TransactionType    `json:"type"`
-	Label                string                  `json:"label"`
-	CategoryID           string                  `json:"category_id"`
-	AmountCents          int64                   `json:"amount_cents"`
-	Currency             string                  `json:"currency"`
-	Interval             core.RecurringInterval  `json:"interval"`
-	DayOfMonth           int                     `json:"day_of_month,omitempty"`
-	Weekday              string                  `json:"weekday,omitempty"`
-	StartDate            string                  `json:"start_date"`
-	EndDate              string                  `json:"end_date,omitempty"`
-	LinkedIncomeStreamID string                  `json:"linked_income_stream_id,omitempty"`
+	Type                 core.TransactionType   `json:"type"`
+	Label                string                 `json:"label"`
+	CategoryID           string                 `json:"category_id"`
+	AmountCents          int64                  `json:"amount_cents"`
+	Currency             string                 `json:"currency"`
+	Interval             core.RecurringInterval `json:"interval"`
+	DayOfMonth           int                    `json:"day_of_month,omitempty"`
+	Weekday              string                 `json:"weekday,omitempty"`
+	StartDate            string                 `json:"start_date"`
+	EndDate              string                 `json:"end_date,omitempty"`
+	LinkedIncomeStreamID string                 `json:"linked_income_stream_id,omitempty"`
 }
 
 type UpdateRecurringRequest struct {
-	Label                *string                  `json:"label,omitempty"`
-	CategoryID           *string                  `json:"category_id,omitempty"`
-	AmountCents          *int64                   `json:"amount_cents,omitempty"`
-	Interval             *core.RecurringInterval  `json:"interval,omitempty"`
-	DayOfMonth           *int                     `json:"day_of_month,omitempty"`
-	Weekday              *string                  `json:"weekday,omitempty"`
-	EndDate              *string                  `json:"end_date,omitempty"`
-	NextOccurrence       *string                  `json:"next_occurrence,omitempty"`
-	LinkedIncomeStreamID *string                  `json:"linked_income_stream_id,omitempty"`
-	IsActive             *bool                    `json:"is_active,omitempty"`
+	Label                *string                 `json:"label,omitempty"`
+	CategoryID           *string                 `json:"category_id,omitempty"`
+	AmountCents          *int64                  `json:"amount_cents,omitempty"`
+	Interval             *core.RecurringInterval `json:"interval,omitempty"`
+	DayOfMonth           *int                    `json:"day_of_month,omitempty"`
+	Weekday              *string                 `json:"weekday,omitempty"`
+	EndDate              *string                 `json:"end_date,omitempty"`
+	NextOccurrence       *string                 `json:"next_occurrence,omitempty"`
+	LinkedIncomeStreamID *string                 `json:"linked_income_stream_id,omitempty"`
+	IsActive             *bool                   `json:"is_active,omitempty"`
 }
 
 // HandleList handles GET /recurring

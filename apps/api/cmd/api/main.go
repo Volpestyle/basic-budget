@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	chiadapter "github.com/awslabs/aws-lambda-go-api-proxy/chi"
+
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/auth"
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/config"
 	httpapi "github.com/jamesvolpe/basic-budget/apps/api/internal/http"

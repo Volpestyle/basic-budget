@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/auth"
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/core"
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/httputil"

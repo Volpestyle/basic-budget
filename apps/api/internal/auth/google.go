@@ -76,7 +76,9 @@ func (v *GoogleVerifier) VerifyIDToken(ctx context.Context, idToken string) (*Go
 	if err != nil {
 		return nil, fmt.Errorf("verifying token: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, ErrInvalidToken

@@ -4,6 +4,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/auth"
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/http/handlers"
 )

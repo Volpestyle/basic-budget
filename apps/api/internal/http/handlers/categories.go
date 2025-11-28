@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/core"
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/httputil"
 	"github.com/jamesvolpe/basic-budget/apps/api/internal/storage"
@@ -23,19 +24,19 @@ func NewCategoriesHandler(categoriesRepo *storage.CategoriesRepository) *Categor
 }
 
 type CreateCategoryRequest struct {
-	Name      string             `json:"name"`
-	Type      core.CategoryType  `json:"type"`
-	Color     string             `json:"color"`
-	Icon      string             `json:"icon"`
-	SortOrder int                `json:"sort_order"`
+	Name      string            `json:"name"`
+	Type      core.CategoryType `json:"type"`
+	Color     string            `json:"color"`
+	Icon      string            `json:"icon"`
+	SortOrder int               `json:"sort_order"`
 }
 
 type UpdateCategoryRequest struct {
-	Name       *string            `json:"name,omitempty"`
-	Color      *string            `json:"color,omitempty"`
-	Icon       *string            `json:"icon,omitempty"`
-	SortOrder  *int               `json:"sort_order,omitempty"`
-	IsArchived *bool              `json:"is_archived,omitempty"`
+	Name       *string `json:"name,omitempty"`
+	Color      *string `json:"color,omitempty"`
+	Icon       *string `json:"icon,omitempty"`
+	SortOrder  *int    `json:"sort_order,omitempty"`
+	IsArchived *bool   `json:"is_archived,omitempty"`
 }
 
 // HandleList handles GET /categories

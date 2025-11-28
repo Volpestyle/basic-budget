@@ -63,21 +63,27 @@ export async function syncPendingTransactions(): Promise<{ synced: number; faile
 }
 
 // Set up online/offline listeners
-export function setupSyncListeners(): () => void {
+export function setupSyncListeners(
+  onSynced?: (result: { synced: number; failed: number }) => void | Promise<void>
+): () => void {
+  const runSync = async () => {
+    const result = await syncPendingTransactions()
+    if (result.synced > 0 || result.failed > 0) {
+      console.log(`[Offline Sync] Synced: ${result.synced}, Failed: ${result.failed}`)
+    }
+    await onSynced?.(result)
+  }
+
   const handleOnline = () => {
     console.log('[Offline Sync] Back online, syncing pending transactions...')
-    syncPendingTransactions().then(({ synced, failed }) => {
-      if (synced > 0 || failed > 0) {
-        console.log(`[Offline Sync] Synced: ${synced}, Failed: ${failed}`)
-      }
-    })
+    void runSync()
   }
 
   window.addEventListener('online', handleOnline)
 
   // Initial sync if online
   if (isOnline()) {
-    syncPendingTransactions()
+    void runSync()
   }
 
   return () => {

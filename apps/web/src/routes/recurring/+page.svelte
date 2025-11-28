@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { tick } from 'svelte'
+  import { gsap } from 'gsap'
   import type { RecurringRule, CreateRecurringRuleRequest, RecurringInterval } from '@basic-budget/types'
   import Header from '$components/Header.svelte'
   import Card from '$components/Card.svelte'
@@ -10,9 +12,19 @@
   import CategoryTag from '$components/CategoryTag.svelte'
   import AmountDisplay from '$components/AmountDisplay.svelte'
   import Spinner from '$components/Spinner.svelte'
-  import { recurringStore, categoriesStore, categoriesById, activeCategories, authReady } from '$stores'
+  import { duration, ease, stagger as staggerConfig, prefersReducedMotion } from '$lib/motion/config'
+  import {
+    recurringStore,
+    categoriesStore,
+    categoriesById,
+    activeCategories,
+    summaryStore,
+    authReady
+  } from '$stores'
 
   let showModal = $state(false)
+  let sectionsRef = $state<HTMLDivElement>()
+  let hasAnimatedInitial = false
   let editingRule = $state<RecurringRule | undefined>(undefined)
   let saving = $state(false)
   let error = $state<string | null>(null)
@@ -142,6 +154,34 @@
     if (!$authReady) return
     void loadData()
   })
+
+  // Animate sections on initial page load
+  $effect(() => {
+    if ($recurringStore.loading || hasAnimatedInitial) return
+    hasAnimatedInitial = true
+
+    tick().then(() => {
+      if (prefersReducedMotion()) return
+
+      const sections = sectionsRef
+      if (sections) {
+        // Animate section headers and their card containers
+        const allCards = sections.querySelectorAll('section > .space-y-3 > div')
+        gsap.fromTo(
+          allCards,
+          { opacity: 0, y: 20, scale: 0.98 },
+          {
+            opacity: 1,
+            y: 0,
+            scale: 1,
+            duration: duration.normal,
+            ease: ease.elastic,
+            stagger: staggerConfig.xs
+          }
+        )
+      }
+    })
+  })
 </script>
 
 <svelte:head>
@@ -160,6 +200,12 @@
 </Header>
 
 <div class="p-6 space-y-8">
+  {#if $summaryStore.error}
+    <div class="p-4 rounded-lg border border-red-500/30 bg-red-500/10 text-red-100 text-sm">
+      {$summaryStore.error}. Summary data may be stale.
+    </div>
+  {/if}
+
   {#if $recurringStore.loading}
     <div class="flex items-center justify-center py-20">
       <Spinner size="lg" />
@@ -171,6 +217,7 @@
       <Button variant="primary" onclick={openNewModal}>Add your first recurring rule</Button>
     </div>
   {:else}
+    <div bind:this={sectionsRef} class="contents">
     <!-- Recurring Expenses -->
     {#if groupedRules().expenses.length > 0}
       <section>
@@ -178,7 +225,7 @@
         <div class="space-y-3">
           {#each groupedRules().expenses as rule}
             {@const category = $categoriesById[rule.category_id]}
-            <Card variant="default" padding="md">
+            <div><Card variant="default" padding="md">
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-4">
                   <div>
@@ -222,7 +269,7 @@
                   </div>
                 </div>
               </div>
-            </Card>
+            </Card></div>
           {/each}
         </div>
       </section>
@@ -235,7 +282,7 @@
         <div class="space-y-3">
           {#each groupedRules().incomes as rule}
             {@const category = $categoriesById[rule.category_id]}
-            <Card variant="default" padding="md">
+            <div><Card variant="default" padding="md">
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-4">
                   <div>
@@ -279,11 +326,12 @@
                   </div>
                 </div>
               </div>
-            </Card>
+            </Card></div>
           {/each}
         </div>
       </section>
     {/if}
+    </div>
   {/if}
 </div>
 

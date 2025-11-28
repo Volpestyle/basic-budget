@@ -3,7 +3,14 @@
   import { page } from '$app/stores'
   import { goto, beforeNavigate, afterNavigate } from '$app/navigation'
   import '../app.css'
-  import { authStore, isAuthenticated, currentUser } from '$stores'
+  import {
+    authStore,
+    isAuthenticated,
+    currentUser,
+    transactionsStore,
+    summaryStore,
+    currentMonthStore
+  } from '$stores'
   import Sidebar from '$components/Sidebar.svelte'
   import BottomNav from '$components/BottomNav.svelte'
   import Spinner from '$components/Spinner.svelte'
@@ -11,6 +18,12 @@
     captureTransitionElements,
     applyTransitionElements,
   } from '$lib/animations/pageTransition'
+  import {
+    initOfflineDB,
+    setupSyncListeners,
+    registerBackgroundSync,
+    getPendingQueue
+  } from '$lib/offline'
 
   interface Props {
     children: import('svelte').Snippet
@@ -42,6 +55,19 @@
     authStore.initialize()
   }
 
+  async function refreshActiveMonth() {
+    if (!$isAuthenticated) return
+    const filters = transactionsStore.getFilters()
+    const month = $currentMonthStore
+
+    await Promise.all([
+      transactionsStore.load(filters),
+      summaryStore.loadMonth(month)
+    ]).catch(() => {
+      // Errors are stored on the respective stores for UI to surface
+    })
+  }
+
   onMount(() => {
     // Initialize dark mode from localStorage or system preference
     const stored = localStorage.getItem('darkMode')
@@ -67,7 +93,47 @@
       }
     })
 
-    return unsubscribe
+    void initOfflineDB()
+    void registerBackgroundSync()
+    void getPendingQueue()
+      .then((queue) => transactionsStore.setPendingCount(queue.length))
+      .catch(() => {
+        // ignore - likely unavailable in environments without IndexedDB
+      })
+
+    const teardownSync = setupSyncListeners(async () => {
+      await refreshActiveMonth()
+      void getPendingQueue()
+        .then((queue) => transactionsStore.setPendingCount(queue.length))
+        .catch(() => {
+          /* ignore IndexedDB errors */
+        })
+    })
+
+    const visibilityHandler = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshActiveMonth()
+      }
+    }
+    const focusHandler = () => {
+      void refreshActiveMonth()
+    }
+    const offlineHandler = () => transactionsStore.setOfflineStatus(true)
+    const onlineHandler = () => transactionsStore.setOfflineStatus(false)
+    transactionsStore.setOfflineStatus(!navigator.onLine)
+    window.addEventListener('visibilitychange', visibilityHandler)
+    window.addEventListener('focus', focusHandler)
+    window.addEventListener('offline', offlineHandler)
+    window.addEventListener('online', onlineHandler)
+
+    return () => {
+      unsubscribe()
+      teardownSync()
+      window.removeEventListener('visibilitychange', visibilityHandler)
+      window.removeEventListener('focus', focusHandler)
+      window.removeEventListener('offline', offlineHandler)
+      window.removeEventListener('online', onlineHandler)
+    }
   })
 
   function handleLogout() {

@@ -517,7 +517,13 @@
   {/snippet}
 </Header>
 
-  <div class="p-6 space-y-6">
+<div class="p-6 space-y-6">
+  {#if $summaryStore.error}
+    <div class="p-4 rounded-lg border border-red-500/30 bg-red-500/10 text-red-100 text-sm">
+      {$summaryStore.error}. Totals may be out of date.
+    </div>
+  {/if}
+
   {#if pageLoading || $budgetsStore.loading || $categoriesStore.loading}
     <div class="flex items-center justify-center py-20">
       <Spinner size="lg" />

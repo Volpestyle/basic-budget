@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { goto } from '$app/navigation'
+  import { gsap } from 'gsap'
   import type { UpdateUserRequest, CreateCategoryRequest } from '@basic-budget/types'
   import Header from '$components/Header.svelte'
   import Card from '$components/Card.svelte'
@@ -9,10 +10,12 @@
   import Select from '$components/Select.svelte'
   import LiquidModal from '$components/LiquidModal.svelte'
   import Spinner from '$components/Spinner.svelte'
+  import { duration, ease, stagger as staggerConfig, prefersReducedMotion } from '$lib/motion/config'
   import { authStore, currentUser, categoriesStore, activeCategories, authReady } from '$stores'
   import { usersApi } from '$api'
 
   let saving = $state(false)
+  let sectionsRef = $state<HTMLDivElement>()
   let showCategoryModal = $state(false)
   let categoryError = $state<string | null>(null)
 
@@ -43,6 +46,23 @@
         locale = user.locale
       }
     })
+
+    // Animate sections on page load
+    if (!prefersReducedMotion() && sectionsRef) {
+      const sections = sectionsRef.querySelectorAll(':scope > section')
+      gsap.fromTo(
+        sections,
+        { opacity: 0, y: 20, scale: 0.98 },
+        {
+          opacity: 1,
+          y: 0,
+          scale: 1,
+          duration: duration.normal,
+          ease: ease.elastic,
+          stagger: staggerConfig.md
+        }
+      )
+    }
 
     return () => {
       unsubscribeAuth()
@@ -136,7 +156,7 @@
 
 <Header title="Settings" />
 
-<div class="p-6 space-y-8 max-w-2xl">
+<div bind:this={sectionsRef} class="p-6 space-y-8 max-w-2xl">
   <!-- Profile Settings -->
   <section>
     <h2 class="text-lg font-semibold text-white mb-4">Profile</h2>

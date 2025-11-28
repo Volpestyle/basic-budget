@@ -11,15 +11,15 @@
   let { title, showMonthPicker = false, actions }: Props = $props()
 </script>
 
-<header class="sticky top-0 z-30 bg-cream-100/80 dark:bg-ink-900/80 backdrop-blur-lg border-b border-ink-900/5 dark:border-white/5">
-  <div class="flex items-center justify-between px-5 py-3">
-    <div class="flex items-center gap-4">
+<header class="sticky top-0 inset-x-0 z-30 bg-cream-100/80 dark:bg-ink-900/80 backdrop-blur-lg border-b border-ink-900/5 dark:border-white/5">
+  <div class="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
+    <div class="flex flex-wrap items-center gap-3 min-w-0 sm:flex-nowrap">
       {#if title}
-        <h1 class="text-lg font-display font-bold text-ink-900 dark:text-white">{title}</h1>
+        <h1 class="text-lg font-display font-bold text-ink-900 dark:text-white truncate">{title}</h1>
       {/if}
 
       {#if showMonthPicker}
-        <div class="flex items-center gap-1">
+        <div class="flex flex-wrap items-center gap-1 sm:flex-nowrap">
           <button
             type="button"
             class="p-1.5 text-ink-900/40 hover:text-ink-900 dark:text-white/40 dark:hover:text-white transition-colors"
@@ -33,7 +33,7 @@
 
           <button
             type="button"
-            class="px-3 py-1.5 text-ink-900 dark:text-white text-sm hover:bg-ink-900/5 dark:hover:bg-white/5 transition-colors min-w-[140px]"
+            class="flex-1 min-w-[120px] sm:flex-none sm:min-w-[140px] px-3 py-1.5 text-ink-900 dark:text-white text-sm hover:bg-ink-900/5 dark:hover:bg-white/5 transition-colors"
             onclick={() => currentMonthStore.goToToday()}
           >
             {$currentMonthDisplay}
@@ -53,7 +53,7 @@
       {/if}
     </div>
 
-    <div class="flex items-center gap-3">
+    <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto sm:justify-end">
       {#if actions}
         {@render actions()}
       {/if}

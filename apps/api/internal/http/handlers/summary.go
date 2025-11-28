@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -35,9 +36,11 @@ func NewSummaryHandler(
 }
 
 type CategoryBreakdown struct {
-	CategoryID   string `json:"category_id"`
-	SpentCents   int64  `json:"spent_cents"`
-	PlannedCents int64  `json:"planned_cents"`
+	CategoryID    string `json:"category_id"`
+	CategoryName  string `json:"category_name"`
+	CategoryColor string `json:"category_color"`
+	SpentCents    int64  `json:"spent_cents"`
+	PlannedCents  int64  `json:"planned_cents"`
 }
 
 type RecurringVsVariable struct {
@@ -75,14 +78,25 @@ func (h *SummaryHandler) HandleMonthSummary(w http.ResponseWriter, r *http.Reque
 	}
 	monthEnd := monthStart.AddDate(0, 1, -1)
 
-	// Planned income from active income streams
+	// Load categories for display metadata
+	categories, err := h.categoriesRepo.List(r.Context(), userCtx.UserID)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to get categories")
+		return
+	}
+	categoryMap := make(map[string]core.Category, len(categories))
+	for _, c := range categories {
+		categoryMap[c.ID] = c
+	}
+
+	// Planned income from active income streams (used as fallback when no actual income exists)
 	streams, err := h.incomeStreamsRepo.List(r.Context(), userCtx.UserID)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to get income streams")
 		return
 	}
 
-	var income int64
+	var plannedIncome int64
 	for _, s := range streams {
 		if !s.IsActive {
 			continue
@@ -99,19 +113,19 @@ func (h *SummaryHandler) HandleMonthSummary(w http.ResponseWriter, r *http.Reque
 		}
 		occurrences := countIncomeOccurrences(s.Period, startDate, endDate, monthStart, monthEnd)
 		if occurrences > 0 {
-			income += int64(occurrences) * s.ExpectedAmountCents
+			plannedIncome += int64(occurrences) * s.ExpectedAmountCents
 		}
 	}
 
-	// Planned expenses/income from recurring rules
+	// Planned expenses/income from recurring rules (used as fallback when no actual transactions exist)
 	rules, err := h.recurringRepo.List(r.Context(), userCtx.UserID)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to get recurring rules")
 		return
 	}
 
-	byCategory := make(map[string]int64)
-	var expenses int64
+	recurringPlannedByCategory := make(map[string]int64)
+	var recurringPlannedExpenses int64
 	for _, rule := range rules {
 		if !rule.IsActive {
 			continue
@@ -133,11 +147,56 @@ func (h *SummaryHandler) HandleMonthSummary(w http.ResponseWriter, r *http.Reque
 
 		total := int64(occurrences) * rule.AmountCents
 		if rule.Type == core.TransactionTypeIncome {
-			income += total
+			plannedIncome += total
 		} else {
-			expenses += total
-			byCategory[rule.CategoryID] += total
+			recurringPlannedExpenses += total
+			recurringPlannedByCategory[rule.CategoryID] += total
 		}
+	}
+
+	// Actual transactions for the month
+	txParams := storage.ListTransactionsParams{
+		UserID: userCtx.UserID,
+		From:   monthStart.Format("2006-01-02"),
+		To:     monthEnd.Format("2006-01-02"),
+		Limit:  1000,
+	}
+
+	transactions, _, err := h.transactionsRepo.List(r.Context(), txParams)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to get transactions")
+		return
+	}
+
+	var income int64
+	var expenses int64
+	byCategory := make(map[string]int64)
+	var recurringExpenseTx int64
+	var variableExpenses int64
+
+	for _, tx := range transactions {
+		switch tx.Type {
+		case core.TransactionTypeIncome:
+			income += tx.AmountCents
+		case core.TransactionTypeExpense:
+			expenses += tx.AmountCents
+			byCategory[tx.CategoryID] += tx.AmountCents
+			if tx.RecurringRuleID != "" {
+				recurringExpenseTx += tx.AmountCents
+			} else {
+				variableExpenses += tx.AmountCents
+			}
+		}
+	}
+
+	recurringExpenses := recurringExpenseTx + recurringPlannedExpenses
+	totalExpenses := recurringExpenses + variableExpenses
+
+	// Fallback to planned income when there are no income transactions
+	hasIncomeTransactions := income > 0
+
+	if !hasIncomeTransactions && plannedIncome > 0 {
+		income = plannedIncome
 	}
 
 	// Get budgets for the month
@@ -153,27 +212,47 @@ func (h *SummaryHandler) HandleMonthSummary(w http.ResponseWriter, r *http.Reque
 		budgetMap[b.CategoryID] = b.PlannedAmountCents
 	}
 
-	// Build category breakdown
-	categoryBreakdown := make([]CategoryBreakdown, 0)
-	for catID, spent := range byCategory {
+	// Build category breakdown with stable ordering
+	categoryIDs := make(map[string]struct{})
+	for catID := range byCategory {
+		categoryIDs[catID] = struct{}{}
+	}
+	for catID := range recurringPlannedByCategory {
+		categoryIDs[catID] = struct{}{}
+	}
+	for catID := range budgetMap {
+		categoryIDs[catID] = struct{}{}
+	}
+
+	sortedIDs := make([]string, 0, len(categoryIDs))
+	for id := range categoryIDs {
+		sortedIDs = append(sortedIDs, id)
+	}
+	sort.Strings(sortedIDs)
+
+	categoryBreakdown := make([]CategoryBreakdown, 0, len(sortedIDs))
+	for _, catID := range sortedIDs {
+		cat := categoryMap[catID]
+		spent := byCategory[catID] + recurringPlannedByCategory[catID]
 		categoryBreakdown = append(categoryBreakdown, CategoryBreakdown{
-			CategoryID:   catID,
-			SpentCents:   spent,
-			PlannedCents: budgetMap[catID],
+			CategoryID:    catID,
+			CategoryName:  cat.Name,
+			CategoryColor: cat.Color,
+			SpentCents:    spent,
+			PlannedCents:  budgetMap[catID],
 		})
 	}
 
 	// Calculate recurring vs variable (simplified - based on whether transaction has recurring_rule_id)
-	// Here we only have recurring-derived expenses; treat them all as recurring.
 	response := MonthSummaryResponse{
 		Month:             month,
 		IncomeTotalCents:  income,
-		ExpenseTotalCents: expenses,
-		NetCents:          income - expenses,
+		ExpenseTotalCents: totalExpenses,
+		NetCents:          income - totalExpenses,
 		CategoryBreakdown: categoryBreakdown,
 		RecurringVsVariable: RecurringVsVariable{
-			RecurringExpensesCents: expenses,
-			VariableExpensesCents:  0,
+			RecurringExpensesCents: recurringExpenses,
+			VariableExpensesCents:  variableExpenses,
 		},
 	}
 

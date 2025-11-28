@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { tick } from 'svelte'
+  import { gsap } from 'gsap'
   import type { IncomeStream, CreateIncomeStreamRequest } from '@basic-budget/types'
   import Header from '$components/Header.svelte'
   import Card from '$components/Card.svelte'
@@ -10,9 +12,12 @@
   import AmountDisplay from '$components/AmountDisplay.svelte'
   import ProgressBar from '$components/ProgressBar.svelte'
   import Spinner from '$components/Spinner.svelte'
-  import { incomeStreamsStore, categoriesStore, incomeCategories, authReady } from '$stores'
+  import { duration, ease, stagger as staggerConfig, prefersReducedMotion } from '$lib/motion/config'
+  import { incomeStreamsStore, categoriesStore, incomeCategories, summaryStore, authReady } from '$stores'
 
   let showModal = $state(false)
+  let cardsGridRef = $state<HTMLDivElement>()
+  let hasAnimatedInitial = false
   let editingStream = $state<IncomeStream | undefined>(undefined)
   let saving = $state(false)
   let error = $state<string | null>(null)
@@ -123,6 +128,33 @@
     if (!$authReady) return
     void loadData()
   })
+
+  // Animate cards on initial page load
+  $effect(() => {
+    if ($incomeStreamsStore.loading || hasAnimatedInitial) return
+    hasAnimatedInitial = true
+
+    tick().then(() => {
+      if (prefersReducedMotion()) return
+
+      const cardsGrid = cardsGridRef
+      if (cardsGrid) {
+        const cards = cardsGrid.querySelectorAll(':scope > div')
+        gsap.fromTo(
+          cards,
+          { opacity: 0, y: 20, scale: 0.98 },
+          {
+            opacity: 1,
+            y: 0,
+            scale: 1,
+            duration: duration.normal,
+            ease: ease.elastic,
+            stagger: staggerConfig.sm
+          }
+        )
+      }
+    })
+  })
 </script>
 
 <svelte:head>
@@ -141,6 +173,12 @@
 </Header>
 
 <div class="p-6 space-y-6">
+  {#if $summaryStore.error}
+    <div class="p-4 rounded-lg border border-red-500/30 bg-red-500/10 text-red-100 text-sm">
+      {$summaryStore.error}. Summary data may be stale.
+    </div>
+  {/if}
+
   {#if $incomeStreamsStore.loading}
     <div class="flex items-center justify-center py-20">
       <Spinner size="lg" />
@@ -152,9 +190,9 @@
       <Button variant="primary" onclick={openNewModal}>Add your first income stream</Button>
     </div>
   {:else}
-    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+    <div bind:this={cardsGridRef} class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
       {#each $incomeStreamsStore.items as stream}
-        <Card variant="default" padding="lg">
+        <div><Card variant="default" padding="lg">
           <div class="flex items-start justify-between mb-4">
             <div>
               <h3 class="text-lg font-semibold text-white">{stream.name}</h3>
@@ -197,7 +235,7 @@
               Delete
             </button>
           </div>
-        </Card>
+        </Card></div>
       {/each}
     </div>
   {/if}

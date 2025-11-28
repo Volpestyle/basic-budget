@@ -7,6 +7,8 @@
     "dev": "turbo run dev",
     "dev:web": "turbo run dev --filter=@basic-budget/web",
     "dev:api": "cd apps/api && make run",
+    "dev:web:host": "turbo run dev --filter=@basic-budget/web -- --host 0.0.0.0 --port 4173",
+    "tunnel": "ngrok start --all --config ngrok.yml",
     "db:start": "docker compose up -d dynamodb",
     "db:stop": "docker compose down",
     "db:init": "cd apps/api && make initdb",

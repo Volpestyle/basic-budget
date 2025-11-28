@@ -1,4 +1,4 @@
-import { writable, derived } from 'svelte/store'
+import { get, writable, derived } from 'svelte/store'
 import type {
   Transaction,
   CreateTransactionRequest,
@@ -11,7 +11,9 @@ import {
   addToPendingQueue,
   cacheTransactions,
   getCachedTransactions
-} from '$lib/offline'
+} from '$lib/offline/db'
+import { summaryStore } from './summary'
+import { currentMonthStore } from './currentMonth'
 
 interface TransactionsState {
   items: Transaction[]
@@ -38,8 +40,12 @@ function createTransactionsStore() {
 
   return {
     subscribe,
+    getFilters() {
+      return get({ subscribe }).filters
+    },
 
     async load(filters: TransactionFilters = {}) {
+      const currentState = get({ subscribe })
       update((state) => ({ ...state, loading: true, error: null, filters }))
 
       // If offline, try to load from cache
@@ -54,7 +60,7 @@ function createTransactionsStore() {
             cursor: null,
             filters,
             offline: true,
-            pendingCount: 0
+            pendingCount: currentState.pendingCount
           })
           return
         } catch {
@@ -62,7 +68,8 @@ function createTransactionsStore() {
             ...state,
             loading: false,
             error: 'Offline - no cached data available',
-            offline: true
+            offline: true,
+            pendingCount: currentState.pendingCount
           }))
           return
         }
@@ -98,7 +105,7 @@ function createTransactionsStore() {
             cursor: null,
             filters,
             offline: true,
-            pendingCount: 0
+            pendingCount: currentState.pendingCount
           })
         } catch {
           update((state) => ({
@@ -187,6 +194,11 @@ function createTransactionsStore() {
           items: [transaction, ...state.items],
           loading: false
         }))
+        void summaryStore
+          .loadMonth(get(currentMonthStore))
+          .catch(() => {
+            /* summaryStore.error will surface */
+          })
         return transaction
       } catch (err) {
         // If network error, queue for later
@@ -219,6 +231,11 @@ function createTransactionsStore() {
           items: state.items.map((tx) => (tx.id === id ? updated : tx)),
           loading: false
         }))
+        void summaryStore
+          .loadMonth(get(currentMonthStore))
+          .catch(() => {
+            /* summaryStore.error will surface */
+          })
         return updated
       } catch (err) {
         update((state) => ({
@@ -239,6 +256,11 @@ function createTransactionsStore() {
           items: state.items.filter((tx) => tx.id !== id),
           loading: false
         }))
+        void summaryStore
+          .loadMonth(get(currentMonthStore))
+          .catch(() => {
+            /* summaryStore.error will surface */
+          })
       } catch (err) {
         update((state) => ({
           ...state,

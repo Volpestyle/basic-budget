@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { tick } from 'svelte'
+  import { gsap } from 'gsap'
   import Header from '$components/Header.svelte'
   import Card from '$components/Card.svelte'
   import AmountDisplay from '$components/AmountDisplay.svelte'
@@ -6,6 +8,7 @@
   import BarChart from '$components/BarChart.svelte'
   import CategoryTag from '$components/CategoryTag.svelte'
   import Spinner from '$components/Spinner.svelte'
+  import { duration, ease, stagger as staggerConfig, prefersReducedMotion } from '$lib/motion/config'
   import {
     currentMonthStore,
     summaryStore,
@@ -17,6 +20,10 @@
   } from '$stores'
 
   let loading = $state(true)
+  let summaryCardsRef = $state<HTMLDivElement>()
+  let chartsGridRef = $state<HTMLDivElement>()
+  let upcomingCardRef = $state<HTMLDivElement>()
+  let hasAnimatedInitial = false
 
   async function loadData() {
     loading = true
@@ -71,6 +78,70 @@
     $currentMonthStore
     void loadData()
   })
+
+  // Animate elements on initial page load
+  $effect(() => {
+    if (loading || hasAnimatedInitial) return
+    hasAnimatedInitial = true
+
+    tick().then(() => {
+      if (prefersReducedMotion()) return
+
+      const tl = gsap.timeline()
+
+      // Animate summary cards
+      if (summaryCardsRef) {
+        const cards = summaryCardsRef.querySelectorAll(':scope > div')
+        tl.fromTo(
+          cards,
+          { opacity: 0, y: 20, scale: 0.98 },
+          {
+            opacity: 1,
+            y: 0,
+            scale: 1,
+            duration: duration.normal,
+            ease: ease.elastic,
+            stagger: staggerConfig.sm
+          },
+          0
+        )
+      }
+
+      // Animate charts grid
+      if (chartsGridRef) {
+        const charts = chartsGridRef.querySelectorAll(':scope > div')
+        tl.fromTo(
+          charts,
+          { opacity: 0, y: 20, scale: 0.98 },
+          {
+            opacity: 1,
+            y: 0,
+            scale: 1,
+            duration: duration.normal,
+            ease: ease.elastic,
+            stagger: staggerConfig.md
+          },
+          0.1
+        )
+      }
+
+      // Animate upcoming card
+      if (upcomingCardRef) {
+        tl.fromTo(
+          upcomingCardRef,
+          { opacity: 0, y: 20, scale: 0.98 },
+          {
+            opacity: 1,
+            y: 0,
+            scale: 1,
+            duration: duration.normal,
+            ease: ease.elastic
+          },
+          0.2
+        )
+      }
+    })
+  })
 </script>
 
 <svelte:head>
@@ -80,44 +151,58 @@
 <Header showMonthPicker />
 
 <div class="p-5 space-y-5">
+  {#if $summaryStore.error}
+    <div class="p-4 rounded-lg border border-red-500/30 bg-red-500/10 text-red-100 text-sm">
+      {$summaryStore.error}. Data may be stale.
+    </div>
+  {/if}
+
   {#if loading}
     <div class="flex items-center justify-center py-20">
       <Spinner size="lg" />
     </div>
   {:else if summary}
     <!-- Summary cards -->
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      <Card>
-        <p class="text-[10px] uppercase tracking-wider text-ink-900/40 dark:text-white/40 mb-1">Income</p>
-        <AmountDisplay cents={summary.income_total_cents} type="income" size="lg" />
-      </Card>
+    <div bind:this={summaryCardsRef} class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div>
+        <Card>
+          <p class="text-[10px] uppercase tracking-wider text-ink-900/40 dark:text-white/40 mb-1">Income</p>
+          <AmountDisplay cents={summary.income_total_cents} type="income" size="lg" />
+        </Card>
+      </div>
 
-      <Card>
-        <p class="text-[10px] uppercase tracking-wider text-ink-900/40 dark:text-white/40 mb-1">Spent</p>
-        <AmountDisplay cents={summary.expense_total_cents} type="expense" size="lg" />
-      </Card>
+      <div>
+        <Card>
+          <p class="text-[10px] uppercase tracking-wider text-ink-900/40 dark:text-white/40 mb-1">Spent</p>
+          <AmountDisplay cents={summary.expense_total_cents} type="expense" size="lg" />
+        </Card>
+      </div>
 
-      <Card>
-        <p class="text-[10px] uppercase tracking-wider text-ink-900/40 dark:text-white/40 mb-1">Net</p>
-        <AmountDisplay
-          cents={summary.net_cents}
-          type={summary.net_cents >= 0 ? 'income' : 'expense'}
-          size="lg"
-        />
-      </Card>
+      <div>
+        <Card>
+          <p class="text-[10px] uppercase tracking-wider text-ink-900/40 dark:text-white/40 mb-1">Net</p>
+          <AmountDisplay
+            cents={summary.net_cents}
+            type={summary.net_cents >= 0 ? 'income' : 'expense'}
+            size="lg"
+          />
+        </Card>
+      </div>
 
-      <Card>
-        <p class="text-[10px] uppercase tracking-wider text-ink-900/40 dark:text-white/40 mb-1">Remaining</p>
-        <p class="text-lg {remainingPercentage >= 0 ? 'text-positive' : 'text-negative'}">
-          {remainingPercentage}%
-        </p>
-      </Card>
+      <div>
+        <Card>
+          <p class="text-[10px] uppercase tracking-wider text-ink-900/40 dark:text-white/40 mb-1">Remaining</p>
+          <p class="text-lg {remainingPercentage >= 0 ? 'text-positive' : 'text-negative'}">
+            {remainingPercentage}%
+          </p>
+        </Card>
+      </div>
     </div>
 
     <!-- Charts row -->
-    <div class="grid md:grid-cols-2 gap-4">
+    <div bind:this={chartsGridRef} class="grid md:grid-cols-2 gap-4">
       <!-- Category breakdown donut -->
-      <Card padding="lg">
+      <div><Card padding="lg">
         <h3 class="text-sm font-display font-bold text-ink-900 dark:text-white mb-5">Spending by Category</h3>
         {#if chartSegments.length > 0}
           <div class="flex flex-col items-center">
@@ -148,10 +233,10 @@
         {:else}
           <p class="text-center text-ink-900/40 dark:text-white/40 py-10 text-sm">No spending data yet</p>
         {/if}
-      </Card>
+      </Card></div>
 
       <!-- Income vs Expenses -->
-      <Card padding="lg">
+      <div><Card padding="lg">
         <h3 class="text-sm font-display font-bold text-ink-900 dark:text-white mb-5">Income vs Expenses</h3>
         <div class="h-[180px] flex items-center justify-center">
           <BarChart data={barChartData} height={160} />
@@ -175,11 +260,11 @@
             </div>
           </div>
         </div>
-      </Card>
+      </Card></div>
     </div>
 
     <!-- Upcoming recurring -->
-    <Card padding="lg">
+    <div bind:this={upcomingCardRef}><Card padding="lg">
       <h3 class="text-sm font-display font-bold text-ink-900 dark:text-white mb-4">Upcoming Recurring</h3>
       {#if $upcomingRecurring.length > 0}
         <div class="space-y-2">
@@ -216,7 +301,7 @@
       {:else}
         <p class="text-ink-900/40 dark:text-white/40 text-sm">No upcoming recurring payments</p>
       {/if}
-    </Card>
+    </Card></div>
   {:else}
     <!-- Empty state -->
     <div class="text-center py-20">

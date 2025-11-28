@@ -48,3 +48,6 @@ coverage/
 
 # Misc
 *.tsbuildinfo
+
+# ngrok (contains authtoken)
+ngrok.yml

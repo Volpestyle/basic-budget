@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { tick } from 'svelte'
+  import { gsap } from 'gsap'
   import type { Transaction, CreateTransactionRequest, TransactionFilters } from '@basic-budget/types'
   import Header from '$components/Header.svelte'
   import Card from '$components/Card.svelte'
@@ -9,6 +11,7 @@
   import AmountDisplay from '$components/AmountDisplay.svelte'
   import Spinner from '$components/Spinner.svelte'
   import TransactionModal from '$components/TransactionModal.svelte'
+  import { duration, ease, stagger as staggerConfig, prefersReducedMotion } from '$lib/motion/config'
   import {
     transactionsStore,
     categoriesStore,
@@ -20,6 +23,9 @@
   } from '$stores'
 
   let showModal = $state(false)
+  let filterCardRef = $state<HTMLDivElement>()
+  let transactionGroupsRef = $state<HTMLDivElement>()
+  let hasAnimatedInitial = false
   let editingTransaction = $state<Transaction | undefined>(undefined)
   let filters = $state<TransactionFilters>({})
 
@@ -124,6 +130,52 @@
     $currentMonthStore
     void loadData()
   })
+
+  // Animate elements on initial page load
+  $effect(() => {
+    if ($transactionsStore.loading || hasAnimatedInitial) return
+    hasAnimatedInitial = true
+
+    tick().then(() => {
+      if (prefersReducedMotion()) return
+
+      const tl = gsap.timeline()
+
+      // Animate filter card
+      if (filterCardRef) {
+        tl.fromTo(
+          filterCardRef,
+          { opacity: 0, y: 20, scale: 0.98 },
+          {
+            opacity: 1,
+            y: 0,
+            scale: 1,
+            duration: duration.normal,
+            ease: ease.elastic
+          },
+          0
+        )
+      }
+
+      // Animate transaction groups
+      if (transactionGroupsRef) {
+        const groups = transactionGroupsRef.querySelectorAll(':scope > div')
+        tl.fromTo(
+          groups,
+          { opacity: 0, y: 20, scale: 0.98 },
+          {
+            opacity: 1,
+            y: 0,
+            scale: 1,
+            duration: duration.normal,
+            ease: ease.elastic,
+            stagger: staggerConfig.sm
+          },
+          0.1
+        )
+      }
+    })
+  })
 </script>
 
 <svelte:head>
@@ -142,8 +194,38 @@
 </Header>
 
 <div class="p-6 space-y-6">
+  {#if $transactionsStore.offline}
+    <div class="p-4 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-100 text-sm">
+      <p class="font-semibold text-amber-50">Offline mode</p>
+      <p class="mt-1">
+        Showing cached transactions.
+        {#if $transactionsStore.pendingCount > 0}
+          {$transactionsStore.pendingCount} pending
+          {$transactionsStore.pendingCount === 1 ? 'transaction is' : 'transactions are'} queued to sync when back online.
+        {/if}
+      </p>
+      {#if $transactionsStore.error}
+        <p class="mt-2 text-amber-50/80">{$transactionsStore.error}</p>
+      {/if}
+    </div>
+  {:else if $transactionsStore.pendingCount > 0}
+    <div class="p-4 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-100 text-sm">
+      <p class="font-semibold text-amber-50">Sync queued</p>
+      <p class="mt-1">
+        {$transactionsStore.pendingCount} pending
+        {$transactionsStore.pendingCount === 1 ? 'transaction will' : 'transactions will'} sync as soon as the connection returns.
+      </p>
+    </div>
+  {/if}
+
+  {#if $transactionsStore.error && !$transactionsStore.offline}
+    <div class="p-4 rounded-lg border border-red-500/30 bg-red-500/10 text-red-100 text-sm">
+      {$transactionsStore.error}
+    </div>
+  {/if}
+
   <!-- Filters -->
-  <Card variant="glass" padding="md">
+  <div bind:this={filterCardRef}><Card variant="glass" padding="md">
     <div class="flex flex-col md:flex-row gap-4">
       <div class="flex-1">
         <Input placeholder="Search transactions..." bind:value={searchQuery} />
@@ -155,7 +237,7 @@
         <Select options={typeOptions} bind:value={selectedType} />
       </div>
     </div>
-  </Card>
+  </Card></div>
 
   <!-- Transactions list -->
   {#if $transactionsStore.loading}
@@ -168,7 +250,7 @@
       <Button variant="primary" onclick={openNewModal}>Add your first transaction</Button>
     </div>
   {:else}
-    <div class="space-y-6">
+    <div bind:this={transactionGroupsRef} class="space-y-6">
       {#each groupedTransactions as [date, transactions]}
         <div>
           <h3 class="text-sm font-medium text-gray-400 mb-3">

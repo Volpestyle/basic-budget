@@ -22,8 +22,13 @@
     placeholder,
     id,
     value = $bindable(''),
+    name,
+    disabled,
+    required,
     class: className = '',
-    ...rest
+    onchange,
+    onblur,
+    onfocus
   }: Props = $props()
 
   const selectId = id ?? `select-${Math.random().toString(36).slice(2, 9)}`
@@ -38,12 +43,17 @@
   <select
     id={selectId}
     bind:value
+    name={name}
+    {disabled}
+    {required}
     class="w-full px-3 py-2 bg-cream-100 dark:bg-ink-700 border text-ink-900 dark:text-white
            text-sm transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-ink-900/20 dark:focus:ring-white/20
            appearance-none cursor-pointer
            {error ? 'border-negative' : 'border-ink-900/10 dark:border-white/10 hover:border-ink-900/20 dark:hover:border-white/20'}
            {className}"
-    {...rest}
+    onchange={onchange}
+    onblur={onblur}
+    onfocus={onfocus}
   >
     {#if placeholder}
       <option value="" disabled>{placeholder}</option>

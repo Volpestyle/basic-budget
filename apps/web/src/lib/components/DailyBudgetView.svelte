@@ -25,7 +25,6 @@
   )
 
   const currentDay = $derived(isCurrentMonth ? today.getDate() : daysInMonth)
-  const remainingDays = $derived(Math.max(1, daysInMonth - currentDay + 1))
   const daysPassed = $derived(currentDay)
 
   // Build lookups

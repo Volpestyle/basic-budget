@@ -40,14 +40,14 @@
 
   let pendingLoad: Promise<void> | null = null
 
-  async function loadData() {
+  async function loadData(month: string) {
     if (pendingLoad) return
     pendingLoad = (async () => {
       pageLoading = true
       await Promise.all([
-        budgetsStore.load($currentMonthStore),
+        budgetsStore.load(month),
         categoriesStore.load(),
-        summaryStore.loadMonth($currentMonthStore)
+        summaryStore.loadMonth(month)
       ])
       initPercentages()
       pageLoading = false
@@ -426,9 +426,8 @@
   // Load when auth is ready and on month changes
   $effect(() => {
     if (!$authReady) return
-    // Ensure dependency on currentMonthStore
-    $currentMonthStore
-    void loadData()
+    const month = $currentMonthStore
+    void loadData(month)
   })
 
   const categoryBreakdown = $derived(

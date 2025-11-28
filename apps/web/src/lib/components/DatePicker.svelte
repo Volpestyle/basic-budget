@@ -9,15 +9,22 @@
     max?: string
   }
 
-  let { 
-    label, 
-    error, 
-    id, 
-    value = $bindable(''), 
+  let {
+    label,
+    error,
+    id,
+    value = $bindable(''),
     min,
     max,
-    class: className = '', 
-    ...rest 
+    name,
+    disabled,
+    required,
+    class: className = '',
+    autocomplete,
+    onchange,
+    oninput,
+    onblur,
+    onfocus
   }: Props = $props()
 
   const inputId = id ?? `datepicker-${Math.random().toString(36).slice(2, 9)}`
@@ -34,13 +41,20 @@
       id={inputId}
       type="date"
       bind:value
+      name={name}
+      {disabled}
+      {required}
       {min}
       {max}
+      autocomplete={autocomplete}
       class="datepicker-input w-full px-3 py-2 bg-cream-100 dark:bg-ink-700 border text-ink-900 dark:text-white
              text-sm transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-ink-900/20 dark:focus:ring-white/20
              {error ? 'border-negative' : 'border-ink-900/10 dark:border-white/10 hover:border-ink-900/20 dark:hover:border-white/20'}
              {className}"
-      {...rest}
+      onchange={onchange}
+      oninput={oninput}
+      onblur={onblur}
+      onfocus={onfocus}
     />
   </div>
   {#if error}
@@ -122,4 +136,3 @@
     opacity: 1;
   }
 </style>
-

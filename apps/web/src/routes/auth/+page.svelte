@@ -9,10 +9,33 @@
 
   let loading = $state(false)
   let error = $state<string | null>(null)
-  let googleButtonContainer: HTMLDivElement
+  let googleButtonContainer = $state<HTMLDivElement>()
   let containerRef = $state<HTMLDivElement>()
 
   const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
+  type GoogleCredentialResponse = {
+    credential: string
+  }
+  type GoogleAccountsId = {
+    initialize: (options: {
+      client_id: string
+      callback: (response: GoogleCredentialResponse) => void
+      auto_select?: boolean
+      cancel_on_tap_outside?: boolean
+    }) => void
+    renderButton: (
+      element: HTMLElement,
+      options: {
+        type?: string
+        theme?: string
+        size?: string
+        text?: string
+        shape?: string
+        width?: number
+      }
+    ) => void
+  }
+  type GoogleApi = { accounts: { id: GoogleAccountsId } }
 
   onMount(() => {
     // Redirect if already authenticated
@@ -24,8 +47,9 @@
 
     // Initialize Google Identity Services and render button
     // Using renderButton instead of prompt() for mobile compatibility
-    if (typeof google !== 'undefined' && GOOGLE_CLIENT_ID) {
-      google.accounts.id.initialize({
+    const googleApi = (globalThis as typeof globalThis & { google?: GoogleApi }).google
+    if (googleApi && GOOGLE_CLIENT_ID && googleButtonContainer) {
+      googleApi.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
         callback: handleGoogleCallback,
         auto_select: false,
@@ -33,7 +57,7 @@
       })
 
       // Render the official Google button - works reliably on mobile
-      google.accounts.id.renderButton(googleButtonContainer, {
+      googleApi.accounts.id.renderButton(googleButtonContainer, {
         type: 'standard',
         theme: 'outline',
         size: 'large',
@@ -102,7 +126,7 @@
     return unsubscribe
   })
 
-  async function handleGoogleCallback(response: google.accounts.id.CredentialResponse) {
+  async function handleGoogleCallback(response: GoogleCredentialResponse) {
     loading = true
     error = null
 

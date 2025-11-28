@@ -27,24 +27,22 @@
   let transactionGroupsRef = $state<HTMLDivElement>()
   let hasAnimatedInitial = false
   let editingTransaction = $state<Transaction | undefined>(undefined)
-  let filters = $state<TransactionFilters>({})
 
   // Filter states
   let searchQuery = $state('')
   let selectedCategory = $state('')
   let selectedType = $state('')
 
-  async function loadData() {
+  async function loadData(currentMonth: string) {
     // Get date range for current month
-    const parts = $currentMonthStore.split('-')
+    const parts = currentMonth.split('-')
     const year = parts[0] ?? String(new Date().getFullYear())
-    const month = parts[1] ?? '01'
-    const from = `${year}-${month}-01`
-    const lastDay = new Date(parseInt(year), parseInt(month), 0).getDate()
-    const to = `${year}-${month}-${String(lastDay).padStart(2, '0')}`
+    const monthPart = parts[1] ?? '01'
+    const from = `${year}-${monthPart}-01`
+    const lastDay = new Date(parseInt(year), parseInt(monthPart), 0).getDate()
+    const to = `${year}-${monthPart}-${String(lastDay).padStart(2, '0')}`
 
-    const loadFilters = { from, to }
-    filters = loadFilters
+    const loadFilters: TransactionFilters = { from, to }
 
     await Promise.all([
       transactionsStore.load(loadFilters),
@@ -126,9 +124,8 @@
   // Load when auth is ready and month changes
   $effect(() => {
     if (!$authReady) return
-    // dependency on month
-    $currentMonthStore
-    void loadData()
+    const month = $currentMonthStore
+    void loadData(month)
   })
 
   // Animate elements on initial page load

@@ -12,7 +12,7 @@ test.describe('Authentication', () => {
     await expect(page.getByText('Sign in with Google')).toBeVisible()
   })
 
-  test('shows app shell after authentication', async ({ page, context }) => {
+  test('shows app shell after authentication', async ({ page }) => {
     // Mock authenticated state by setting localStorage token
     await page.goto('/auth')
 

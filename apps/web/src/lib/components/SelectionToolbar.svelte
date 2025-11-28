@@ -16,7 +16,6 @@
   import type { Snippet } from 'svelte'
   import { gsap } from 'gsap'
   import { duration, ease, prefersReducedMotion } from '$lib/motion/config'
-  import { liquidButton } from '$lib/motion/actions'
 
   interface Props {
     selectedCount: number

@@ -13,7 +13,11 @@
     padding = 'md',
     class: className = '',
     children,
-    ...rest
+    id,
+    role,
+    style,
+    ariaLabel,
+    onclick
   }: Props = $props()
 
   const variants = {
@@ -30,6 +34,13 @@
   }
 </script>
 
-<div class="rounded-lg {variants[variant]} {paddings[padding]} {className}" {...rest}>
+<div
+  id={id}
+  role={role}
+  style={style}
+  aria-label={ariaLabel}
+  class="rounded-lg {variants[variant]} {paddings[padding]} {className}"
+  onclick={onclick}
+>
   {@render children()}
 </div>

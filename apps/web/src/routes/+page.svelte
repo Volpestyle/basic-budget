@@ -25,11 +25,11 @@
   let upcomingCardRef = $state<HTMLDivElement>()
   let hasAnimatedInitial = false
 
-  async function loadData() {
+  async function loadData(month: string) {
     loading = true
     try {
       await Promise.all([
-        summaryStore.loadMonth($currentMonthStore),
+        summaryStore.loadMonth(month),
         categoriesStore.load(),
         recurringStore.load()
       ])
@@ -74,9 +74,8 @@
   // Load when auth is ready and month changes
   $effect(() => {
     if (!$authReady) return
-    // dependency on month
-    $currentMonthStore
-    void loadData()
+    const month = $currentMonthStore
+    void loadData(month)
   })
 
   // Animate elements on initial page load

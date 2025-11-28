@@ -148,7 +148,6 @@
 <svelte:window onkeydown={handleKeydown} />
 
 {#if open || animating}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     bind:this={backdropRef}
     class="fixed inset-0 z-50 bg-ink-900/40 dark:bg-black/60 backdrop-blur-sm"

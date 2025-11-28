@@ -19,7 +19,18 @@
     disabled,
     class: className = '',
     children,
-    ...rest
+    type = 'button',
+    name,
+    value,
+    form,
+    ariaLabel,
+    ariaControls,
+    ariaExpanded,
+    ariaDescribedby,
+    ariaPressed,
+    title,
+    id,
+    onclick
   }: Props = $props()
 
   const baseStyles =
@@ -46,8 +57,19 @@
   <button
     use:liquidButton
     class="{baseStyles} {variants[variant]} {sizes[size]} {className}"
+    type={type}
+    name={name}
+    value={value}
+    form={form}
+    id={id}
+    title={title}
+    aria-label={ariaLabel}
+    aria-controls={ariaControls}
+    aria-expanded={ariaExpanded}
+    aria-describedby={ariaDescribedby}
+    aria-pressed={ariaPressed}
     disabled={disabled || loading}
-    {...rest}
+    onclick={onclick}
   >
     {#if loading}
       <svg
@@ -70,8 +92,19 @@
 {:else}
   <button
     class="{baseStyles} {variants[variant]} {sizes[size]} {className}"
+    type={type}
+    name={name}
+    value={value}
+    form={form}
+    id={id}
+    title={title}
+    aria-label={ariaLabel}
+    aria-controls={ariaControls}
+    aria-expanded={ariaExpanded}
+    aria-describedby={ariaDescribedby}
+    aria-pressed={ariaPressed}
     disabled={disabled || loading}
-    {...rest}
+    onclick={onclick}
   >
     {#if loading}
       <svg

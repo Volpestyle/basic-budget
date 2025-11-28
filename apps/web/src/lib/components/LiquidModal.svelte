@@ -19,7 +19,7 @@
   import type { Snippet } from 'svelte'
   import { onMount } from 'svelte'
   import { gsap } from 'gsap'
-  import { duration, ease, transform, depth, prefersReducedMotion } from '$lib/motion/config'
+  import { duration, ease, transform, prefersReducedMotion } from '$lib/motion/config'
 
   interface Props {
     open: boolean
@@ -171,7 +171,6 @@
 <svelte:window onkeydown={handleKeydown} />
 
 {#if open || animating}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     bind:this={backdropRef}
     class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-ink-900/40 dark:bg-black/60 backdrop-blur-sm"

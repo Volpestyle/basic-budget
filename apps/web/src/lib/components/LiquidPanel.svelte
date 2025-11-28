@@ -29,7 +29,11 @@
     animate = true,
     class: className = '',
     children,
-    ...rest
+    id,
+    role,
+    style,
+    ariaLabel,
+    onclick
   }: Props = $props()
 
   // Calculate entrance position based on direction
@@ -51,15 +55,23 @@
       scale: config.scale,
       delay,
     }}
+    id={id}
+    role={role}
+    style={style}
+    aria-label={ariaLabel}
     class="bg-cream-50 dark:bg-ink-900 border border-ink-900/10 dark:border-white/10 rounded-lg p-5 {className}"
-    {...rest}
+    onclick={onclick}
   >
     {@render children()}
   </div>
 {:else}
   <div
+    id={id}
+    role={role}
+    style={style}
+    aria-label={ariaLabel}
     class="bg-cream-50 dark:bg-ink-900 border border-ink-900/10 dark:border-white/10 rounded-lg p-5 {className}"
-    {...rest}
+    onclick={onclick}
   >
     {@render children()}
   </div>

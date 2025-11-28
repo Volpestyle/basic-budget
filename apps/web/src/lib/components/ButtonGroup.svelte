@@ -97,28 +97,30 @@
     }
   }
 
+  function handleKeydown(event: KeyboardEvent) {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    const button = (event.target as HTMLElement).closest('button')
+    if (button) {
+      event.preventDefault()
+      button.click()
+    }
+  }
+
   const baseStyles = 'relative inline-flex gap-0.5 p-0.5'
   const variantStyles = {
     default: 'bg-cream-200 dark:bg-ink-800 rounded-md',
     pills: 'bg-transparent gap-2',
   }
-
-  const buttonBaseStyles =
-    'relative z-10 px-3 py-1.5 text-sm font-mono transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-900 dark:focus-visible:ring-white focus-visible:ring-offset-1'
-
-  const buttonVariantStyles = {
-    default: 'rounded',
-    pills: 'rounded-full border border-ink-900/10 dark:border-white/10',
-  }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
   bind:this={containerRef}
   class="{baseStyles} {variantStyles[variant]}"
   onclick={handleButtonClick}
-  role="group"
+  onkeydown={handleKeydown}
+  role="radiogroup"
   aria-label="Button group"
+  tabindex="0"
 >
   <!-- Morphing highlight indicator -->
   <div

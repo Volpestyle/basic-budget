@@ -7,7 +7,6 @@
 <script lang="ts">
   import {
     Button,
-    ButtonGroup,
     LiquidPanel,
     LiquidModal,
     LiquidDrawer,
@@ -21,6 +20,7 @@
   let drawerOpen = $state(false)
   let selectedItems = $state(0)
   let selectedTab = $state('overview')
+  const selectionItems = Array.from({ length: 8 }, (_, i) => i)
 
   function handleSave() {
     console.log('Save clicked')
@@ -173,7 +173,7 @@
       </p>
 
       <div use:liquidStagger class="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {#each Array(8) as _, i}
+        {#each selectionItems as i}
           <button
             class="p-4 bg-cream-200 dark:bg-ink-800 rounded-lg border-2 transition-colors {selectedItems >
             i

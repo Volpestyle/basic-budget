@@ -32,9 +32,8 @@
   let { primary, options, variant = 'primary' }: Props = $props()
 
   let isExpanded = $state(false)
-  let containerRef = $state<HTMLDivElement>()
-  let primaryButtonRef = $state<HTMLButtonElement>()
-  let optionsContainerRef = $state<HTMLDivElement>()
+  let primaryButtonRef = $state<HTMLButtonElement | null>(null)
+  let optionsContainerRef = $state<HTMLDivElement | null>(null)
 
   function toggleExpanded() {
     isExpanded = !isExpanded
@@ -47,15 +46,16 @@
   }
 
   function animateExpand() {
-    if (prefersReducedMotion() || !optionsContainerRef) return
+    if (prefersReducedMotion() || !optionsContainerRef || !primaryButtonRef) return
 
     const buttons = optionsContainerRef.querySelectorAll('.split-option')
+    const primaryButton = primaryButtonRef
 
     const tl = gsap.timeline()
 
     // Primary button slides left and shrinks slightly
     tl.to(
-      primaryButtonRef,
+      primaryButton,
       {
         x: -10,
         scale: 0.95,
@@ -86,9 +86,10 @@
   }
 
   function animateCollapse() {
-    if (prefersReducedMotion() || !optionsContainerRef) return
+    if (prefersReducedMotion() || !optionsContainerRef || !primaryButtonRef) return
 
     const buttons = optionsContainerRef.querySelectorAll('.split-option')
+    const primaryButton = primaryButtonRef
 
     const tl = gsap.timeline()
 
@@ -108,7 +109,7 @@
 
     // Primary button returns to position
     tl.to(
-      primaryButtonRef,
+      primaryButton,
       {
         x: 0,
         scale: 1,
@@ -133,7 +134,7 @@
   }
 </script>
 
-<div bind:this={containerRef} class="relative inline-flex items-center gap-2">
+<div class="relative inline-flex items-center gap-2">
   <!-- Primary button -->
   <button
     bind:this={primaryButtonRef}

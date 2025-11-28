@@ -32,12 +32,13 @@
     id,
     role,
     style,
-    ariaLabel,
+    'aria-label': ariaLabel,
     onclick
   }: Props = $props()
 
   // Calculate entrance position based on direction
-  const entranceConfig = {
+  type EntranceConfig = { y: number; x?: number; scale?: number }
+  const entranceConfig: Record<NonNullable<Props['enterFrom']>, EntranceConfig> = {
     top: { y: -20 },
     bottom: { y: 20 },
     left: { y: 0, x: -20 },

@@ -30,8 +30,8 @@
   let { trigger, align = 'left', children }: Props = $props()
 
   let isOpen = $state(false)
-  let menuRef = $state<HTMLDivElement>()
-  let contentRef = $state<HTMLDivElement>()
+  let menuRef = $state<HTMLDivElement | null>(null)
+  let contentRef = $state<HTMLDivElement | null>(null)
   let animating = $state(false)
 
   // Animate menu open/close
@@ -39,16 +39,16 @@
     if (!menuRef || !contentRef) return
 
     if (isOpen) {
-      animateIn()
+      animateIn(menuRef, contentRef)
     } else if (animating) {
-      animateOut()
+      animateOut(menuRef)
     }
   })
 
-  function animateIn() {
+  function animateIn(menuEl: HTMLDivElement, contentEl: HTMLDivElement) {
     if (prefersReducedMotion()) {
-      gsap.set(menuRef, { opacity: 1, scale: 1 })
-      gsap.set(contentRef.children, { opacity: 1, y: 0 })
+      gsap.set(menuEl, { opacity: 1, scale: 1 })
+      gsap.set(contentEl.children, { opacity: 1, y: 0 })
       animating = true
       return
     }
@@ -59,7 +59,7 @@
 
     // Menu expands from origin with elastic ease
     tl.fromTo(
-      menuRef,
+      menuEl,
       {
         opacity: 0,
         scale: transform.menuOriginScale,
@@ -76,7 +76,7 @@
 
     // Menu items stagger in
     tl.fromTo(
-      contentRef.children,
+      contentEl.children,
       { opacity: 0, y: -10 },
       {
         opacity: 1,
@@ -89,9 +89,9 @@
     )
   }
 
-  function animateOut() {
+  function animateOut(menuEl: HTMLDivElement) {
     if (prefersReducedMotion()) {
-      gsap.set(menuRef, { opacity: 0, scale: transform.menuOriginScale })
+      gsap.set(menuEl, { opacity: 0, scale: transform.menuOriginScale })
       animating = false
       return
     }
@@ -104,7 +104,7 @@
 
     // Menu shrinks back
     tl.to(
-      menuRef,
+      menuEl,
       {
         opacity: 0,
         scale: transform.menuOriginScale,

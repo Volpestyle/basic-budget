@@ -32,8 +32,8 @@
 
   let { open, onClose, title, size = 'md', children, footer }: Props = $props()
 
-  let backdropRef = $state<HTMLDivElement>()
-  let contentRef = $state<HTMLDivElement>()
+  let backdropRef = $state<HTMLDivElement | null>(null)
+  let contentRef = $state<HTMLDivElement | null>(null)
   let animating = $state(false)
 
   const sizes = {
@@ -48,16 +48,16 @@
     if (!backdropRef || !contentRef) return
 
     if (open) {
-      animateIn()
+      animateIn(backdropRef, contentRef)
     } else if (animating) {
-      animateOut()
+      animateOut(backdropRef, contentRef)
     }
   })
 
-  function animateIn() {
+  function animateIn(backdropEl: HTMLDivElement, contentEl: HTMLDivElement) {
     if (prefersReducedMotion()) {
-      gsap.set(backdropRef, { opacity: 1 })
-      gsap.set(contentRef, { opacity: 1, scale: 1 })
+      gsap.set(backdropEl, { opacity: 1 })
+      gsap.set(contentEl, { opacity: 1, scale: 1 })
       animating = true
       return
     }
@@ -69,7 +69,7 @@
 
     // Backdrop fades in
     tl.fromTo(
-      backdropRef,
+      backdropEl,
       { opacity: 0 },
       {
         opacity: 1,
@@ -81,7 +81,7 @@
 
     // Content expands in with elastic ease
     tl.fromTo(
-      contentRef,
+      contentEl,
       {
         opacity: 0,
         scale: transform.modalEnterScale,
@@ -98,10 +98,10 @@
     )
   }
 
-  function animateOut() {
+  function animateOut(backdropEl: HTMLDivElement, contentEl: HTMLDivElement) {
     if (prefersReducedMotion()) {
-      gsap.set(backdropRef, { opacity: 0 })
-      gsap.set(contentRef, { opacity: 0, scale: transform.modalEnterScale })
+      gsap.set(backdropEl, { opacity: 0 })
+      gsap.set(contentEl, { opacity: 0, scale: transform.modalEnterScale })
       animating = false
       return
     }
@@ -114,7 +114,7 @@
 
     // Content shrinks out
     tl.to(
-      contentRef,
+      contentEl,
       {
         opacity: 0,
         scale: transform.modalEnterScale,
@@ -127,7 +127,7 @@
 
     // Backdrop fades out
     tl.to(
-      backdropRef,
+      backdropEl,
       {
         opacity: 0,
         duration: duration.normal,

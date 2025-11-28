@@ -25,9 +25,9 @@
 
   let { open, onClose, side = 'right', title, width = '320px', children }: Props = $props()
 
-  let backdropRef = $state<HTMLDivElement>()
-  let drawerRef = $state<HTMLDivElement>()
-  let contentRef = $state<HTMLDivElement>()
+  let backdropRef = $state<HTMLDivElement | null>(null)
+  let drawerRef = $state<HTMLDivElement | null>(null)
+  let contentRef = $state<HTMLDivElement | null>(null)
   let animating = $state(false)
 
   // Animate drawer open/close
@@ -35,17 +35,21 @@
     if (!backdropRef || !drawerRef || !contentRef) return
 
     if (open) {
-      animateIn()
+      animateIn(backdropRef, drawerRef, contentRef)
     } else if (animating) {
-      animateOut()
+      animateOut(backdropRef, drawerRef)
     }
   })
 
-  function animateIn() {
+  function animateIn(
+    backdropEl: HTMLDivElement,
+    drawerEl: HTMLDivElement,
+    contentEl: HTMLDivElement
+  ) {
     if (prefersReducedMotion()) {
-      gsap.set(backdropRef, { opacity: 1 })
-      gsap.set(drawerRef, { x: 0 })
-      gsap.set(contentRef.children, { opacity: 1, y: 0 })
+      gsap.set(backdropEl, { opacity: 1 })
+      gsap.set(drawerEl, { x: 0 })
+      gsap.set(contentEl.children, { opacity: 1, y: 0 })
       animating = true
       return
     }
@@ -56,7 +60,7 @@
 
     // Backdrop fades in
     tl.fromTo(
-      backdropRef,
+      backdropEl,
       { opacity: 0 },
       {
         opacity: 1,
@@ -69,7 +73,7 @@
     // Drawer slides in from the side
     const xStart = side === 'left' ? '-100%' : '100%'
     tl.fromTo(
-      drawerRef,
+      drawerEl,
       { x: xStart },
       {
         x: 0,
@@ -81,7 +85,7 @@
 
     // Content children stagger in
     tl.fromTo(
-      contentRef.children,
+      contentEl.children,
       { opacity: 0, y: 15 },
       {
         opacity: 1,
@@ -94,10 +98,10 @@
     )
   }
 
-  function animateOut() {
+  function animateOut(backdropEl: HTMLDivElement, drawerEl: HTMLDivElement) {
     if (prefersReducedMotion()) {
-      gsap.set(backdropRef, { opacity: 0 })
-      gsap.set(drawerRef, { x: side === 'left' ? '-100%' : '100%' })
+      gsap.set(backdropEl, { opacity: 0 })
+      gsap.set(drawerEl, { x: side === 'left' ? '-100%' : '100%' })
       animating = false
       return
     }
@@ -111,7 +115,7 @@
     // Drawer slides out
     const xEnd = side === 'left' ? '-100%' : '100%'
     tl.to(
-      drawerRef,
+      drawerEl,
       {
         x: xEnd,
         duration: duration.normal,
@@ -122,7 +126,7 @@
 
     // Backdrop fades out
     tl.to(
-      backdropRef,
+      backdropEl,
       {
         opacity: 0,
         duration: duration.normal,

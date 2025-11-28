@@ -16,7 +16,7 @@
     id,
     role,
     style,
-    ariaLabel,
+    'aria-label': ariaLabel,
     onclick
   }: Props = $props()
 

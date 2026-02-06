@@ -8,6 +8,7 @@ import type { Tables } from './storage-stack.js'
 
 interface ApiStackProps extends cdk.StackProps {
   tables: Tables
+  frontendOrigins?: string[]
 }
 
 export class ApiStack extends cdk.Stack {
@@ -18,6 +19,12 @@ export class ApiStack extends cdk.Stack {
     super(scope, id, props)
 
     const { tables } = props
+
+    const allowOrigins = [
+      'http://localhost:5173',
+      'http://localhost:4173',
+      ...(props.frontendOrigins ?? []),
+    ]
 
     // Secret for Google OAuth client secret
     const googleSecret = new secretsmanager.Secret(this, 'GoogleOAuthSecret', {
@@ -72,7 +79,7 @@ export class ApiStack extends cdk.Stack {
           apigateway.CorsHttpMethod.DELETE,
           apigateway.CorsHttpMethod.OPTIONS,
         ],
-        allowOrigins: ['http://localhost:5173', 'http://localhost:4173'],
+        allowOrigins,
         maxAge: cdk.Duration.hours(24),
       },
     })

@@ -3,6 +3,7 @@ import 'source-map-support/register.js'
 import * as cdk from 'aws-cdk-lib'
 import { StorageStack } from '../lib/stacks/storage-stack.js'
 import { ApiStack } from '../lib/stacks/api-stack.js'
+import { FrontendStack } from '../lib/stacks/frontend-stack.js'
 
 const app = new cdk.App()
 
@@ -16,8 +17,14 @@ const storageStack = new StorageStack(app, 'BasicBudgetStorage', {
   description: 'Basic Budget - DynamoDB tables',
 })
 
+const frontendStack = new FrontendStack(app, 'BasicBudgetFrontend', {
+  env,
+  description: 'Basic Budget - Frontend hosting (S3 + CloudFront)',
+})
+
 new ApiStack(app, 'BasicBudgetApi', {
   env,
   description: 'Basic Budget - API Gateway and Lambda',
   tables: storageStack.tables,
+  frontendOrigins: [frontendStack.cloudFrontUrl],
 })

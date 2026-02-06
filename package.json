@@ -22,11 +22,16 @@
     "format:check": "prettier --check .",
     "typecheck": "turbo run typecheck",
     "deploy": "cd infra && pnpm cdk deploy --all",
-    "deploy:diff": "cd infra && pnpm cdk diff"
+    "deploy:diff": "cd infra && pnpm cdk diff",
+    "sync:prod": "pnpm tsx scripts/sync-env-to-github.ts --env=.env.production --environment=production"
   },
   "devDependencies": {
+    "@octokit/rest": "^21.1.1",
     "@types/node": "^22.10.1",
+    "dotenv": "^16.4.5",
+    "libsodium-wrappers": "^0.7.14",
     "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
     "turbo": "^2.3.3",
     "typescript": "^5.7.2"
   },

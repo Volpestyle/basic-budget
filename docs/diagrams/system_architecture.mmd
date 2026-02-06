@@ -1,0 +1,36 @@
+flowchart LR
+  subgraph Mobile[React Native + Expo App]
+    UI[UI Screens]
+    SM[State Management]
+    Calc[Budget Calculations]
+    DB[(SQLite Local DB)]
+    Charts[Charts]
+    Secure[Secure Store]
+  end
+
+  subgraph OptionalBackend[Optional Backend]
+    API[REST/GraphQL API]
+    Token[Token Exchange Service]
+    Webhook[Webhook Handler]
+    CloudDB[(Cloud DB)]
+  end
+
+  subgraph Provider[Bank Data Provider]
+    Link[Link / OAuth]
+    Tx[Transactions API]
+  end
+
+  UI --> SM
+  SM --> Calc
+  SM --> DB
+  UI --> Charts
+  Secure --> SM
+
+  Mobile <--> API
+  API --> CloudDB
+
+  API --> Token
+  Token <--> Link
+  API <--> Tx
+  Tx --> Webhook
+  Webhook --> API

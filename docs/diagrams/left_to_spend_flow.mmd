@@ -1,0 +1,10 @@
+flowchart TD
+  A[Select period + date] --> B[Load budgets + carryover]
+  B --> C[Aggregate spent in scope]
+  C --> D[Compute remaining]
+  D --> E{Cadence?}
+  E -->|weekly| F[left_this_week = weeklyBudget - spent_week]
+  E -->|monthly| G[Pro-rate remaining into week/day]
+  F --> H[Clamp at 0 if overspent]
+  G --> H
+  H --> I[Return left_today + left_this_week + remaining_period]

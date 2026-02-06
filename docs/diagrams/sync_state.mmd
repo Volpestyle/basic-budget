@@ -1,0 +1,8 @@
+stateDiagram-v2
+  [*] --> Idle
+  Idle --> Syncing : user pulls / background trigger
+  Syncing --> ApplyingRemote : received remote changes
+  ApplyingRemote --> UploadingLocal : local changes pending
+  UploadingLocal --> Idle : success
+  Syncing --> Error : network/auth failure
+  Error --> Idle : user retries

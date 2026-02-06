@@ -1,0 +1,7 @@
+flowchart LR
+  UI[React Screens] --> Store[UI Store]
+  Store --> Services[Domain Services]
+  Services --> Repo[SQLite Repositories]
+  Repo --> DB[(SQLite)]
+  Services --> Calc[Budget Calculations]
+  Store --> Charts[Chart Data Builders]

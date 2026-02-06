@@ -1,0 +1,14 @@
+flowchart TD
+  A[Launch] --> B[Onboarding]
+  B --> C[Dashboard]
+  C --> D[Categories]
+  C --> E[Transactions]
+  C --> F[Insights]
+  C --> G[Settings]
+
+  D --> D1[Category Detail]
+  C --> H[Add Transaction Modal]
+  D --> H
+  E --> H
+  H --> E
+  H --> D1

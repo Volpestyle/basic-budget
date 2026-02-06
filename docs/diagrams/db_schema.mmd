@@ -1,0 +1,44 @@
+erDiagram
+  PERIODS ||--o{ BUDGETS : has
+  CATEGORIES ||--o{ BUDGETS : allocated
+  PERIODS ||--o{ TRANSACTIONS : contains
+  CATEGORIES ||--o{ TRANSACTIONS : categorized_as
+
+  PERIODS {
+    string id PK
+    string cycle_type
+    string start_date
+    string end_date
+    int income_cents
+  }
+
+  CATEGORIES {
+    string id PK
+    string name
+    string kind
+    string icon
+    string color
+    string archived_at
+  }
+
+  BUDGETS {
+    string id PK
+    string period_id FK
+    string category_id FK
+    string cadence
+    int amount_cents
+    string rollover_rule
+    int carryover_cents
+  }
+
+  TRANSACTIONS {
+    string id PK
+    string date
+    int amount_cents
+    string category_id FK
+    string period_id FK
+    string merchant
+    string source
+    string external_id
+    string status
+  }
